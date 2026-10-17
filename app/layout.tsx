@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Noto_Sans_Lao } from "next/font/google";
 import "./globals.css";
-import { AppShell } from "@/components/layout/app-shell";
-import { DemoStoreProvider } from "@/lib/store/demo-store";
+import { AuthProvider } from "@/lib/auth/session";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -41,9 +40,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         className="min-h-full bg-background text-foreground"
         suppressHydrationWarning
       >
-        <DemoStoreProvider>
-          <AppShell>{children}</AppShell>
-        </DemoStoreProvider>
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );

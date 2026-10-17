@@ -12,8 +12,9 @@ import {
 } from "lucide-react";
 import { formatNumber, formatRelative } from "@/lib/format";
 import { toast } from "sonner";
-import { countAudience, describeFilters } from "@/lib/services/outlet-service";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { describeFilters } from "@/lib/services/outlet-service";
+import { useAppStore } from "@/lib/store/app-store";
+import { ApiError } from "@/lib/api/client";
 import type { Segment } from "@/types/segment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,7 +38,7 @@ export function SavedSegmentsTable({
   onDelete,
   isLoading = false,
 }: SavedSegmentsTableProps) {
-  const store = useDemoStore();
+  const store = useAppStore();
   const [search, setSearch] = React.useState("");
 
   const segments = React.useMemo(() => {
@@ -49,14 +50,6 @@ export function SavedSegmentsTable({
         segment.description.toLowerCase().includes(needle),
     );
   }, [store.segments, search]);
-
-  const matchCounts = React.useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const segment of store.segments) {
-      counts.set(segment.id, countAudience(store.outlets, segment.filters));
-    }
-    return counts;
-  }, [store.segments, store.outlets]);
 
   const columns = React.useMemo<DataTableColumn<Segment>[]>(
     () => [
@@ -92,7 +85,7 @@ export function SavedSegmentsTable({
         align: "right",
         render: (segment) => (
           <span className="font-medium tabular-nums">
-            {formatNumber(matchCounts.get(segment.id) ?? 0)}
+            {segment.matchCount === null ? "—" : formatNumber(segment.matchCount)}
           </span>
         ),
       },
@@ -138,12 +131,20 @@ export function SavedSegmentsTable({
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => {
-                  const copy = store.duplicateSegment(segment.id);
-                  if (copy) {
-                    toast.success("Segment duplicated", {
-                      description: `“${copy.name}” was created.`,
-                    });
-                  }
+                  void store
+                    .duplicateSegment(segment.id)
+                    .then((copy) =>
+                      toast.success("Segment duplicated", {
+                        description: `“${copy.name}” was created.`,
+                      }),
+                    )
+                    .catch((cause: unknown) =>
+                      toast.error(
+                        cause instanceof ApiError
+                          ? cause.message
+                          : "The segment could not be duplicated.",
+                      ),
+                    );
                 }}
               >
                 <Copy aria-hidden="true" />
@@ -159,7 +160,7 @@ export function SavedSegmentsTable({
         ),
       },
     ],
-    [matchCounts, onDelete, onEdit, store],
+    [onDelete, onEdit, store],
   );
 
   return (
@@ -174,7 +175,7 @@ export function SavedSegmentsTable({
           className="h-9 w-full max-w-sm rounded-md border border-input bg-card px-2.5 text-[13px] shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
         />
         <Badge variant="outline">
-          {formatNumber(segments.length)} of {formatNumber(store.segments.length)} segments
+          {formatNumber(segments.length)} of {formatNumber(store.segmentsTotal)} segments
         </Badge>
       </div>
 

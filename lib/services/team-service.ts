@@ -1,6 +1,10 @@
-/** Team member helpers. */
+/**
+ * Team member helpers.
+ *
+ * Accounts are created and updated on the API, so only the client-side filter
+ * for the team table is kept here.
+ */
 
-import type { TeamMemberFormValues } from "@/lib/schemas/team";
 import type { TeamMember, TeamMemberStatus, TeamRole } from "@/types/team";
 
 export interface TeamFilters {
@@ -25,19 +29,4 @@ export function filterTeamMembers(members: TeamMember[], filters: TeamFilters): 
     if (filters.status !== "all" && member.status !== filters.status) return false;
     return true;
   });
-}
-
-export function createTeamMember(
-  values: TeamMemberFormValues,
-  now = new Date(),
-): TeamMember {
-  return {
-    id: `usr-${crypto.randomUUID().slice(0, 8)}`,
-    name: values.name.trim(),
-    email: values.email.trim().toLowerCase(),
-    role: values.role,
-    status: "Invited",
-    lastActive: null,
-    invitedAt: now.toISOString(),
-  };
 }

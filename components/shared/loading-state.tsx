@@ -2,9 +2,9 @@ import * as React from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
-/** Skeleton used while the demo dataset is loading in the browser. */
+/** Skeleton used while data is loading from the API. */
 export function LoadingState({
-  label = "Loading demo data…",
+  label = "Loading…",
   variant = "table",
   className,
 }: {

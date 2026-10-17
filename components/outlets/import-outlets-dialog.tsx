@@ -3,15 +3,16 @@
 import * as React from "react";
 import { AlertTriangle, Download, FileSpreadsheet, Upload, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import { formatNumber } from "@/lib/format";
+import { downloadFile, formatNumber } from "@/lib/format";
 import {
-  outletCsvTemplate,
-  parseOutletsCsv,
-  type CsvImportResult,
-  type CsvImportRow,
-} from "@/lib/services/outlet-service";
-import { useDemoStore } from "@/lib/store/demo-store";
-import { downloadFile } from "@/lib/format";
+  commitImport,
+  outletImportTemplate,
+  previewImport,
+  type ImportPreviewResult,
+  type ImportRowResult,
+} from "@/lib/api/outlets";
+import { ApiError } from "@/lib/api/client";
+import { useAppStore } from "@/lib/store/app-store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,24 +34,25 @@ export function ImportOutletsDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const store = useDemoStore();
+  const store = useAppStore();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = React.useState<string | null>(null);
-  const [result, setResult] = React.useState<CsvImportResult | null>(null);
+  const [content, setContent] = React.useState<string | null>(null);
+  const [preview, setPreview] = React.useState<ImportPreviewResult | null>(null);
   const [skipDuplicates, setSkipDuplicates] = React.useState(true);
-  const [selected, setSelected] = React.useState<string[]>([]);
+  const [busy, setBusy] = React.useState(false);
 
   function handleOpenChange(next: boolean) {
     if (!next) {
       // Reset the preview so a reopened dialog never shows a stale file.
       setFileName(null);
-      setResult(null);
-      setSelected([]);
+      setContent(null);
+      setPreview(null);
     }
     onOpenChange(next);
   }
 
-  const columns = React.useMemo<DataTableColumn<CsvImportRow>[]>(
+  const columns = React.useMemo<DataTableColumn<ImportRowResult>[]>(
     () => [
       {
         key: "line",
@@ -75,9 +77,7 @@ export function ImportOutletsDialog({
         key: "phone",
         header: "Phone",
         hideBelow: "sm",
-        render: (row) => (
-          <span className="tabular-nums">{row.values?.phone || "—"}</span>
-        ),
+        render: (row) => <span className="tabular-nums">{row.values?.phone || "—"}</span>,
       },
       {
         key: "location",
@@ -104,11 +104,11 @@ export function ImportOutletsDialog({
         header: "Validation",
         render: (row) => (
           <div className="flex flex-col items-start gap-1">
-            {row.errors.length > 0 ? (
+            {row.status === "error" ? (
               <Badge variant="destructive">Row skipped</Badge>
             ) : row.duplicate ? (
               <Badge variant="warning">Duplicate phone</Badge>
-            ) : row.warnings.length > 0 ? (
+            ) : row.status === "warning" ? (
               <Badge variant="warning">Warning</Badge>
             ) : (
               <Badge variant="success">Ready</Badge>
@@ -128,29 +128,59 @@ export function ImportOutletsDialog({
   async function handleFile(file: File) {
     if (!file.name.toLowerCase().endsWith(".csv")) {
       toast.error("Unsupported file", {
-        description:
-          "Only comma-separated (.csv) files are parsed in this prototype. Excel workbooks are not supported yet.",
+        description: "Only comma-separated (.csv) files can be imported.",
       });
       return;
     }
+
     const text = await file.text();
-    const parsed = parseOutletsCsv(text, store.outlets);
-    setResult(parsed);
-    setFileName(file.name);
-    const importable = parsed.rows.filter(
-      (row) => row.values !== null && (!skipDuplicates || row.duplicate === null),
-    );
-    setSelected(importable.map((row) => row.id));
+    setBusy(true);
+    try {
+      const result = await previewImport(file.name, text, "CSV import");
+      setPreview(result);
+      setContent(text);
+      setFileName(file.name);
+      if (result.parseError) {
+        toast.error("The file could not be read", { description: result.parseError });
+      }
+    } catch (cause) {
+      toast.error(
+        cause instanceof ApiError ? cause.message : "The file could not be validated.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
-  const rowsById = React.useMemo(
-    () => new Map((result?.rows ?? []).map((row) => [row.id, row])),
-    [result],
-  );
+  const rows = preview?.rows ?? [];
+  const importableCount = preview
+    ? rows.filter(
+        (row) => row.status !== "error" && (!skipDuplicates || row.duplicate === null),
+      ).length
+    : 0;
 
-  const selectedRows = selected
-    .map((id) => rowsById.get(id))
-    .filter((row): row is CsvImportRow => Boolean(row));
+  async function handleImport() {
+    if (!content || !fileName || !preview) return;
+    setBusy(true);
+    try {
+      const outcome = await commitImport(fileName, content, "CSV import", {
+        jobId: preview.jobId,
+        duplicatePolicy: skipDuplicates ? "skip" : "import",
+      });
+      await store.reload();
+      toast.success(`${formatNumber(outcome.created)} outlets imported`, {
+        description:
+          outcome.skipped > 0
+            ? `${formatNumber(outcome.skipped)} duplicate rows were skipped.`
+            : "Every valid row was imported.",
+      });
+      handleOpenChange(false);
+    } catch (cause) {
+      toast.error(cause instanceof ApiError ? cause.message : "The import failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -158,9 +188,9 @@ export function ImportOutletsDialog({
         <DialogHeader>
           <DialogTitle>Import outlets from CSV</DialogTitle>
           <DialogDescription>
-            Upload a comma-separated file to add outlets in bulk. Every row is validated before it
-            reaches the outlet database, and duplicates are flagged. Excel (.xlsx) files are not
-            supported in this prototype.
+            Upload a comma-separated file to add outlets in bulk. The server validates every row,
+            flags duplicates against the register, and reports what was imported. Excel (.xlsx)
+            files are not supported.
           </DialogDescription>
         </DialogHeader>
 
@@ -170,6 +200,7 @@ export function ImportOutletsDialog({
               type="button"
               variant="outline"
               size="sm"
+              disabled={busy}
               onClick={() => inputRef.current?.click()}
             >
               <Upload aria-hidden="true" />
@@ -179,9 +210,13 @@ export function ImportOutletsDialog({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() =>
-                downloadFile("partner-club-outlet-template.csv", outletCsvTemplate(), "text/csv")
-              }
+              onClick={() => {
+                void outletImportTemplate()
+                  .then((csv) =>
+                    downloadFile("partner-club-outlet-template.csv", csv, "text/csv"),
+                  )
+                  .catch(() => toast.error("The template could not be downloaded."));
+              }}
             >
               <Download aria-hidden="true" />
               Download template
@@ -192,7 +227,9 @@ export function ImportOutletsDialog({
                 {fileName}
               </Badge>
             ) : (
-              <span className="text-[12px] text-muted-foreground">No file selected</span>
+              <span className="text-[12px] text-muted-foreground">
+                {busy ? "Validating…" : "No file selected"}
+              </span>
             )}
             <input
               ref={inputRef}
@@ -212,60 +249,43 @@ export function ImportOutletsDialog({
             <Switch
               id="skip-duplicates"
               checked={skipDuplicates}
-              onCheckedChange={(checked) => {
-                setSkipDuplicates(checked);
-                if (result) {
-                  const importable = result.rows.filter(
-                    (row) => row.values !== null && (!checked || row.duplicate === null),
-                  );
-                  setSelected(importable.map((row) => row.id));
-                }
-              }}
+              onCheckedChange={setSkipDuplicates}
             />
             <Label htmlFor="skip-duplicates" className="text-[12px]">
-              Skip rows with a phone number that already exists in the outlet database
+              Skip rows with a phone number that already exists in the outlet register
             </Label>
           </div>
 
-          {result ? (
+          {preview ? (
             <>
               <ul className="flex flex-wrap items-center gap-2 text-[12px]">
-                <Badge variant="outline">{formatNumber(result.totalRows)} rows read</Badge>
-                <Badge variant={result.errorRows > 0 ? "destructive" : "secondary"}>
+                <Badge variant="outline">{formatNumber(preview.summary.totalRows)} rows read</Badge>
+                <Badge variant={preview.summary.errorRows > 0 ? "destructive" : "secondary"}>
                   <XCircle aria-hidden="true" />
-                  {formatNumber(result.errorRows)} with errors
+                  {formatNumber(preview.summary.errorRows)} with errors
                 </Badge>
-                <Badge variant={result.duplicateRows > 0 ? "warning" : "secondary"}>
+                <Badge variant={preview.summary.duplicateRows > 0 ? "warning" : "secondary"}>
                   <AlertTriangle aria-hidden="true" />
-                  {formatNumber(result.duplicateRows)} duplicate phone numbers
+                  {formatNumber(preview.summary.duplicateRows)} duplicate phone numbers
                 </Badge>
-                <Badge variant={result.warningRows > 0 ? "warning" : "secondary"}>
-                  {formatNumber(result.warningRows)} with warnings
+                <Badge variant={preview.summary.warningRows > 0 ? "warning" : "secondary"}>
+                  {formatNumber(preview.summary.warningRows)} with warnings
                 </Badge>
-                <Badge variant="success">
-                  {formatNumber(selectedRows.length)} selected to import
-                </Badge>
+                <Badge variant="success">{formatNumber(importableCount)} will be imported</Badge>
               </ul>
 
-              {result.headerWarning ? (
+              {preview.headerWarning ? (
                 <p className="flex items-start gap-2 rounded-md border border-warning/25 bg-warning-surface px-3 py-2 text-[12px] leading-5 text-warning">
                   <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-                  {result.headerWarning}
+                  {preview.headerWarning}
                 </p>
               ) : null}
 
               <div className="max-h-72 overflow-y-auto">
                 <DataTable
                   columns={columns}
-                  rows={result.rows}
-                  getRowId={(row) => row.id}
-                  selectable
-                  selectedIds={selected}
-                  onSelectedIdsChange={(ids) =>
-                    setSelected(
-                      ids.filter((id) => rowsById.get(id)?.values !== null),
-                    )
-                  }
+                  rows={rows}
+                  getRowId={(row) => String(row.lineNumber)}
                   empty={{ title: "No data rows found in this file." }}
                   caption="CSV import preview"
                 />
@@ -286,17 +306,10 @@ export function ImportOutletsDialog({
           </Button>
           <Button
             type="button"
-            disabled={selectedRows.length === 0}
-            onClick={() => {
-              const created = store.importOutlets(selectedRows);
-              toast.success(`${formatNumber(created)} outlets imported`, {
-                description:
-                  "Imported records are saved in this browser only. Reset the demo data to discard them.",
-              });
-              handleOpenChange(false);
-            }}
+            disabled={busy || importableCount === 0}
+            onClick={() => void handleImport()}
           >
-            Import {selectedRows.length > 0 ? formatNumber(selectedRows.length) : ""} outlets
+            Import {importableCount > 0 ? formatNumber(importableCount) : ""} outlets
           </Button>
         </DialogFooter>
       </DialogContent>

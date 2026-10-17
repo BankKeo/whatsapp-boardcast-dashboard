@@ -1,16 +1,14 @@
 "use client";
 
 import * as React from "react";
-import { RefreshCw } from "lucide-react";
-import { toast } from "sonner";
-import { CURRENT_USER } from "@/lib/data/constants";
+import { LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { useSession } from "@/lib/auth/session";
+import { useAppStore } from "@/lib/store/app-store";
 import { initialsOf } from "@/lib/format";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 
 export function SidebarBrand({ collapsed }: { collapsed: boolean }) {
   return (
@@ -41,8 +39,9 @@ export function SidebarFooter({
   collapsed: boolean;
   onToggle: () => void;
 }) {
-  const store = useDemoStore();
-  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const { user, logout } = useSession();
+  const { health } = useAppStore();
+  const [signingOut, setSigningOut] = React.useState(false);
 
   return (
     <div className="border-t border-sidebar-border p-2">
@@ -53,11 +52,11 @@ export function SidebarFooter({
         )}
       >
         <Avatar className="size-7">
-          <AvatarFallback>{initialsOf(CURRENT_USER.name)}</AvatarFallback>
+          <AvatarFallback>{initialsOf(user?.name ?? "Partner Club")}</AvatarFallback>
         </Avatar>
         <div className={cn("flex min-w-0 flex-1 flex-col leading-tight", collapsed && "sr-only")}>
-          <span className="truncate text-[12px] font-medium">{CURRENT_USER.name}</span>
-          <span className="truncate text-[11px] text-muted-foreground">{CURRENT_USER.role}</span>
+          <span className="truncate text-[12px] font-medium">{user?.name}</span>
+          <span className="truncate text-[11px] text-muted-foreground">{user?.role}</span>
         </div>
       </div>
 
@@ -67,14 +66,18 @@ export function SidebarFooter({
           variant="ghost"
           size="xs"
           className="justify-start gap-1.5 text-muted-foreground"
-          onClick={() => setConfirmOpen(true)}
+          disabled={signingOut}
+          onClick={() => {
+            setSigningOut(true);
+            void logout().finally(() => setSigningOut(false));
+          }}
         >
-          <RefreshCw aria-hidden="true" />
-          <span className={cn(collapsed && "sr-only")}>Reset demo data</span>
+          <LogOut aria-hidden="true" />
+          <span className={cn(collapsed && "sr-only")}>{signingOut ? "Signing out…" : "Sign out"}</span>
         </Button>
         {!collapsed ? (
-          <Badge variant={store.persisted ? "warning" : "outline"} className="ml-auto">
-            {store.persisted ? "Saved locally" : "Fresh demo data"}
+          <Badge variant={health?.simulated ? "warning" : "outline"} className="ml-auto">
+            {health?.simulated ? "Simulated" : "Connected"}
           </Badge>
         ) : null}
       </div>
@@ -96,27 +99,6 @@ export function SidebarFooter({
           </span>
         </Button>
       </div>
-
-      <ConfirmDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title="Reset demo data?"
-        description={
-          <>
-            This clears the changes saved in this browser and rebuilds the sample dataset from
-            scratch. Outlet additions, edits, deletions, segments, campaigns and templates created
-            during the demo will be lost. No real data or WhatsApp configuration is affected.
-          </>
-        }
-        confirmLabel="Reset demo data"
-        destructive
-        onConfirm={() => {
-          store.resetDemoData();
-          toast.success("Demo data reset", {
-            description: "The sample dataset has been rebuilt in this browser.",
-          });
-        }}
-      />
     </div>
   );
 }

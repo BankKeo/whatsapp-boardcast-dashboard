@@ -4,7 +4,9 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Bell, CircleHelp, LogOut, Search, Settings, User } from "lucide-react";
-import { CURRENT_USER } from "@/lib/data/constants";
+import { useSession } from "@/lib/auth/session";
+import { formatNumber } from "@/lib/format";
+import { useAppStore } from "@/lib/store/app-store";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -61,6 +63,9 @@ export interface AppHeaderProps {
 
 export function AppHeader({ onOpenMobileNav, onOpenSearch, headerAction }: AppHeaderProps) {
   const crumbs = useBreadcrumbs();
+  const { user, logout } = useSession();
+  const { health, outletStats, templates } = useAppStore();
+  const pendingTemplates = templates.filter((template) => template.status !== "Approved").length;
 
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-card/95 px-3 backdrop-blur supports-[backdrop-filter]:bg-card/80 lg:px-5">
@@ -137,11 +142,11 @@ export function AppHeader({ onOpenMobileNav, onOpenSearch, headerAction }: AppHe
             <DropdownMenuLabel>Notifications</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem className="items-start gap-2 whitespace-normal">
-              <Badge variant="warning" className="mt-0.5">
-                Demo
+              <Badge variant={health?.simulated ? "warning" : "success"} className="mt-0.5">
+                {health?.simulated ? "Simulated" : "Provider"}
               </Badge>
               <span className="text-[12px] leading-5">
-                WhatsApp Business connection is not configured. Campaign sends remain simulated.
+                {health?.message ?? "Integration status is reported by the API."}
               </span>
             </DropdownMenuItem>
             <DropdownMenuItem className="items-start gap-2 whitespace-normal">
@@ -149,7 +154,8 @@ export function AppHeader({ onOpenMobileNav, onOpenSearch, headerAction }: AppHe
                 Data
               </Badge>
               <span className="text-[12px] leading-5">
-                Sample dataset loaded with 12,480 outlet records for demonstration purposes.
+                {formatNumber(outletStats?.total ?? 0)} outlet records in the register ·{" "}
+                {formatNumber(outletStats?.eligible ?? 0)} eligible on WhatsApp.
               </span>
             </DropdownMenuItem>
             <DropdownMenuItem className="items-start gap-2 whitespace-normal">
@@ -157,7 +163,9 @@ export function AppHeader({ onOpenMobileNav, onOpenSearch, headerAction }: AppHe
                 Review
               </Badge>
               <span className="text-[12px] leading-5">
-                2 templates are waiting for local review before they can be used in campaigns.
+                {formatNumber(pendingTemplates)} template
+                {pendingTemplates === 1 ? "" : "s"} awaiting approval before campaigns can use{" "}
+                {pendingTemplates === 1 ? "it" : "them"}.
               </span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
@@ -194,30 +202,30 @@ export function AppHeader({ onOpenMobileNav, onOpenSearch, headerAction }: AppHe
               variant="ghost"
               size="icon-sm"
               className="rounded-full"
-              aria-label={`Account menu for ${CURRENT_USER.name}`}
+              aria-label={`Account menu for ${user?.name ?? "your account"}`}
             >
               <Avatar className="size-7">
-                <AvatarFallback>{initialsOf(CURRENT_USER.name)}</AvatarFallback>
+                <AvatarFallback>{initialsOf(user?.name ?? "Partner Club")}</AvatarFallback>
               </Avatar>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-64">
             <DropdownMenuLabel className="flex flex-col gap-0.5">
               <span className="text-[13px] font-medium normal-case text-foreground">
-                {CURRENT_USER.name}
+                {user?.name}
               </span>
               <span className="text-[11px] font-normal normal-case text-muted-foreground">
-                {CURRENT_USER.email}
+                {user?.email}
               </span>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem disabled>
               <User aria-hidden="true" />
-              Signed in as {CURRENT_USER.role}
+              Signed in as {user?.role}
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
               <Link href="/team">
-                <Badge variant="outline">UI only</Badge>
+                <Badge variant="outline">Admin only</Badge>
                 Manage roles
               </Link>
             </DropdownMenuItem>
@@ -228,9 +236,13 @@ export function AppHeader({ onOpenMobileNav, onOpenSearch, headerAction }: AppHe
               </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem disabled>
+            <DropdownMenuItem
+              onSelect={() => {
+                void logout();
+              }}
+            >
               <LogOut aria-hidden="true" />
-              Sign out (not available in the prototype)
+              Sign out
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

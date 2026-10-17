@@ -1,13 +1,21 @@
 "use client";
 
+/**
+ * Settings and integration status.
+ *
+ * Every value on this screen comes from the API: the company profile and
+ * messaging rules are stored settings, and the connection panels report the
+ * live provider state (`simulated` while no WhatsApp credentials are set). The
+ * audit log is the server's own record of what happened.
+ */
+
 import * as React from "react";
 import Link from "next/link";
 import {
   Activity,
   Building2,
-  CheckCircle2,
+  Clock,
   Database,
-  FlaskConical,
   KeyRound,
   MessageSquare,
   Plug,
@@ -19,15 +27,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatNumber, formatRelative } from "@/lib/format";
-import {
-  COMPANY,
-  CURRENT_USER,
-  OUTLET_DATABASE_CONNECTION,
-  PRICING,
-  PROVINCES,
-  WHATSAPP_CONNECTION,
-} from "@/lib/data/constants";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { COMPANY, PROVINCES } from "@/lib/data/constants";
+import { sectionValue } from "@/lib/api/settings";
+import { ApiError } from "@/lib/api/client";
+import { useAppStore } from "@/lib/store/app-store";
+import { useSession } from "@/lib/auth/session";
 import { OUTLET_CATEGORIES } from "@/types/outlet";
 import { ROLE_CAPABILITIES, TEAM_ROLES } from "@/types/team";
 import { Badge } from "@/components/ui/badge";
@@ -37,14 +41,13 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/layout/page-header";
-import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { ConnectionBadge } from "@/components/shared/status-badge";
 import { LoadingState } from "@/components/shared/loading-state";
 
 export function SettingsScreen() {
-  const store = useDemoStore();
-  const [confirmReset, setConfirmReset] = React.useState(false);
-  const [consentRequired, setConsentRequired] = React.useState(true);
+  const store = useAppStore();
+  const { user } = useSession();
+  const [savingConsent, setSavingConsent] = React.useState(false);
 
   if (!store.ready) {
     return (
@@ -59,27 +62,54 @@ export function SettingsScreen() {
   }
 
   const stats = store.outletStats;
+  const health = store.health;
+  const company = sectionValue(store.settings, "company.profile");
+  const whatsapp = sectionValue(store.settings, "whatsapp.connection");
+  const outletDatabase = sectionValue(store.settings, "outlet.database");
+  const approval = sectionValue(store.settings, "approval.workflow");
+  const limits = sectionValue(store.settings, "messaging.limits");
+  const consent = sectionValue(store.settings, "contact.consent");
+  const pricing = sectionValue(store.settings, "reporting.pricing");
+  const canManageSettings = store.settings !== null;
+
+  function updateSection(key: Parameters<typeof store.updateSettingSection>[0], value: Record<string, unknown>) {
+    return store
+      .updateSettingSection(key, value)
+      .then(() => toast.success("Settings updated"))
+      .catch((cause: unknown) =>
+        toast.error(
+          cause instanceof ApiError ? cause.message : "The setting could not be updated.",
+        ),
+      );
+  }
 
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Settings"
-        description="Workspace configuration for the Partner Club WhatsApp Marketing System. Integration states are shown honestly — nothing is connected in the prototype."
+        description="Workspace configuration for the Partner Club WhatsApp Marketing System. Integration states are reported by the API, never assumed."
         headerAction={
-          <Button variant="outline" size="sm" onClick={() => setConfirmReset(true)}>
+          <Button variant="outline" size="sm" onClick={() => void store.reload()}>
             <RefreshCw aria-hidden="true" />
-            Reset demo data
+            Refresh
           </Button>
         }
         meta={
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="warning">Prototype configuration</Badge>
+            <ConnectionBadge status={health?.simulated ? "simulated" : health?.connected ? "connected" : "disconnected"} />
             <Badge variant="outline">
-              Demo data {store.persisted ? "saved in this browser" : "generated fresh"}
+              Signed in as {user?.name} · {user?.role}
             </Badge>
           </div>
         }
       />
+
+      {!canManageSettings ? (
+        <p className="rounded-md border border-warning/25 bg-warning-surface px-3 py-2 text-[12px] text-warning">
+          Settings can only be viewed and changed by an Administrator. The figures below come from
+          the outlet register and are read-only for your role.
+        </p>
+      ) : null}
 
       <div className="grid min-w-0 gap-3 xl:grid-cols-2">
         <Card className="min-w-0">
@@ -89,19 +119,17 @@ export function SettingsScreen() {
                 <Building2 className="size-3.5 text-muted-foreground" aria-hidden="true" />
                 Company profile
               </CardTitle>
-              <CardDescription>
-                Used on campaign approvals and exported reports. Read-only in the prototype.
-              </CardDescription>
+              <CardDescription>Used on campaign approvals and exported reports.</CardDescription>
             </div>
-            <Badge variant="outline">Read-only</Badge>
+            <Badge variant="outline">{canManageSettings ? "Administrator" : "Read-only"}</Badge>
           </CardHeader>
           <CardContent className="grid gap-3 sm:grid-cols-2">
-            <Field label="Legal entity" value={COMPANY.name} />
-            <Field label="Group" value={COMPANY.group} />
-            <Field label="Programme" value={COMPANY.programme} />
-            <Field label="Market" value={`${COMPANY.country} (${COMPANY.countryCode})`} />
-            <Field label="Dial code" value={COMPANY.dialCode} />
-            <Field label="Workspace owner" value={`${CURRENT_USER.name} · ${CURRENT_USER.role}`} />
+            <Field label="Legal entity" value={company?.legalName ?? COMPANY.name} />
+            <Field label="Group" value={company?.group ?? COMPANY.group} />
+            <Field label="Programme" value={company?.programme ?? COMPANY.programme} />
+            <Field label="Market" value={company?.country ?? COMPANY.country} />
+            <Field label="Dial code" value={company?.dialCode ?? COMPANY.dialCode} />
+            <Field label="Workspace owner" value={`${user?.name ?? "—"} · ${user?.role ?? ""}`} />
           </CardContent>
         </Card>
 
@@ -112,37 +140,51 @@ export function SettingsScreen() {
                 <Plug className="size-3.5 text-muted-foreground" aria-hidden="true" />
                 WhatsApp Business Platform
               </CardTitle>
-              <CardDescription>Messaging channels, templates and delivery receipts.</CardDescription>
+              <CardDescription>Messaging channel, templates and delivery receipts.</CardDescription>
             </div>
-            <ConnectionBadge status={WHATSAPP_CONNECTION.status} />
+            <ConnectionBadge
+              status={health?.simulated ? "simulated" : health?.connected ? "connected" : "disconnected"}
+            />
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <dl className="grid gap-3 sm:grid-cols-2">
-              <Field label="Business account" value={WHATSAPP_CONNECTION.businessAccount} />
-              <Field label="Phone number ID" value="Not configured" />
-              <Field label="Display name" value="Not configured" />
-              <Field label="Last sync" value="Never" />
+              <Field label="Provider" value={health?.provider ?? "unknown"} />
+              <Field
+                label="Business account"
+                value={whatsapp?.businessAccountId || "Not configured"}
+              />
+              <Field label="Phone number ID" value={whatsapp?.phoneNumberId || "Not configured"} />
+              <Field label="Display name" value={whatsapp?.displayName || "Not configured"} />
             </dl>
-            <p className="flex items-start gap-2 rounded-md border border-warning/25 bg-warning-surface px-3 py-2 text-[12px] leading-5 text-warning">
-              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-              {WHATSAPP_CONNECTION.note}
-            </p>
+            {health ? (
+              <p
+                className={
+                  health.simulated
+                    ? "flex items-start gap-2 rounded-md border border-warning/25 bg-warning-surface px-3 py-2 text-[12px] leading-5 text-warning"
+                    : "flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-[12px] leading-5 text-muted-foreground"
+                }
+              >
+                <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                {health.message}
+              </p>
+            ) : null}
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() =>
-                  toast.info("Connection check", {
-                    description:
-                      "No WhatsApp Business Platform credentials are configured, so the prototype stays in demo mode.",
-                  })
+                  void store.reload().then(() =>
+                    toast.info("Connection status refreshed", {
+                      description: health?.message ?? "The API reported the current state.",
+                    }),
+                  )
                 }
               >
                 Check connection status
               </Button>
               <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                 <KeyRound className="size-3.5" aria-hidden="true" />
-                Credentials are never read from or written to the browser.
+                Credentials stay on the server and are never sent to the browser.
               </span>
             </div>
           </CardContent>
@@ -153,25 +195,28 @@ export function SettingsScreen() {
             <div>
               <CardTitle className="flex items-center gap-1.5">
                 <Database className="size-3.5 text-muted-foreground" aria-hidden="true" />
-                Outlet database integration
+                Outlet register
               </CardTitle>
               <CardDescription>Where outlet and consent records come from.</CardDescription>
             </div>
-            <ConnectionBadge status={OUTLET_DATABASE_CONNECTION.status} />
+            <ConnectionBadge status="connected" />
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
-            <Field label="Data source" value={OUTLET_DATABASE_CONNECTION.name} />
-            <p className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-[12px] leading-5 text-muted-foreground">
-              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-              {OUTLET_DATABASE_CONNECTION.note}
-            </p>
+            <Field label="Data source" value="Partner Club API · MongoDB register" />
             <dl className="grid gap-2 sm:grid-cols-3">
-              <Field label="Records" value={formatNumber(stats.total)} />
-              <Field label="Eligible contacts" value={formatNumber(stats.eligible)} />
-              <Field label="Consent on file" value={formatNumber(stats.consented)} />
+              <Field label="Records" value={formatNumber(stats?.total ?? 0)} />
+              <Field label="Eligible contacts" value={formatNumber(stats?.eligible ?? 0)} />
+              <Field label="Consent on file" value={formatNumber(stats?.consented ?? 0)} />
+            </dl>
+            <dl className="grid gap-2 sm:grid-cols-2">
+              <Field
+                label="Duplicate handling"
+                value={outletDatabase?.duplicatePolicy === "block" ? "Block on import" : "Flag for review"}
+              />
+              <Field label="Default channel" value={outletDatabase?.defaultChannel ?? "Field team"} />
             </dl>
             <Button asChild variant="outline" size="sm" className="self-start">
-              <Link href="/outlets">Open outlet database</Link>
+              <Link href="/outlets">Open outlet register</Link>
             </Button>
           </CardContent>
         </Card>
@@ -205,10 +250,6 @@ export function SettingsScreen() {
                 </li>
               ))}
             </ul>
-            <p className="text-[11px] leading-4 text-muted-foreground">
-              Adding provinces, districts or categories is a configuration change that ships with
-              the backend integration in Phase 3.
-            </p>
           </CardContent>
         </Card>
 
@@ -243,8 +284,8 @@ export function SettingsScreen() {
               </div>
             ))}
             <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
-              Roles change the interface in the prototype. Backend-enforced authorisation is part of
-              Phase 3.
+              Roles are enforced by the API on every request: a role without the permission gets a
+              403 rather than a hidden button.
             </p>
           </CardContent>
         </Card>
@@ -255,16 +296,18 @@ export function SettingsScreen() {
               <CardTitle>Approval workflow</CardTitle>
               <CardDescription>How a campaign moves from draft to send.</CardDescription>
             </div>
-            <Badge variant="outline">Local workflow</Badge>
+            <Badge variant={approval?.requireApproval === false ? "warning" : "outline"}>
+              {approval?.requireApproval === false ? "Approval optional" : "Approval required"}
+            </Badge>
           </CardHeader>
           <CardContent>
             <ol className="flex flex-col gap-2">
               {[
-                "Campaign creator builds the audience and message, then saves a draft.",
-                "The campaign is submitted for approval (Pending Approval).",
-                "A marketing manager reviews the rules, template status and message.",
-                "Approved campaigns are scheduled; cancelled campaigns keep their audit trail.",
-                "Sends are simulated in the prototype — real dispatch needs the WhatsApp integration.",
+                "A campaign creator builds the audience and message, then saves a draft.",
+                "Submitting moves the campaign to Pending Approval.",
+                `An approver (${(approval?.approverRoles ?? ["Administrator", "Marketing Manager"]).join(", ")}) reviews it.`,
+                "Approved campaigns are scheduled; the server dispatches due campaigns.",
+                "Consent and eligibility are re-checked at send time, one message per number.",
               ].map((stepText, index) => (
                 <li key={stepText} className="flex gap-2 text-[12px] leading-5">
                   <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold tabular-nums text-muted-foreground">
@@ -291,12 +334,18 @@ export function SettingsScreen() {
             <Field label="Template body limit" value="1,024 characters" />
             <Field label="Template variables" value="Positional {{1}}–{{6}}" />
             <Field label="Recipient requirement" value="Opt-in consent + verified number" />
-            <Field label="Rate limits" value="Not configured" />
+            <Field
+              label="Daily cap per contact"
+              value={limits ? `${limits.dailyCapPerContact} messages / 24h` : "—"}
+            />
+            <Field
+              label="Max recipients per campaign"
+              value={limits ? formatNumber(limits.maxRecipientsPerCampaign) : "—"}
+            />
             <Field
               label="Cost estimate"
-              value={PRICING.configured ? "Configured" : "Unavailable — pricing not configured"}
+              value={pricing?.configured ? `Configured (${pricing.currency})` : "Unavailable — pricing not configured"}
             />
-            <Field label="Read receipts" value="Available for a subset of demo sends" />
           </CardContent>
         </Card>
 
@@ -306,29 +355,48 @@ export function SettingsScreen() {
               <CardTitle>Contact consent</CardTitle>
               <CardDescription>How consent is recorded and honoured.</CardDescription>
             </div>
+            <Clock className="size-3.5 text-muted-foreground" aria-hidden="true" />
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
               <Switch
                 id="consent-required"
-                checked={consentRequired}
+                checked={consent?.requireExplicitConsent ?? true}
+                disabled={!canManageSettings || savingConsent}
                 onCheckedChange={(checked) => {
-                  setConsentRequired(checked);
-                  toast.info(checked ? "Consent required" : "Consent rule relaxed", {
-                    description: checked
-                      ? "Audiences exclude contacts without marketing consent. This is the recommended setting."
-                      : "Contacts without consent can be included in audiences. Not recommended for production.",
-                  });
+                  setSavingConsent(true);
+                  void updateSection("contact.consent", { requireExplicitConsent: checked }).finally(
+                    () => setSavingConsent(false),
+                  );
                 }}
               />
               <Label htmlFor="consent-required" className="text-[12px]">
                 Exclude contacts without marketing consent from audiences
               </Label>
             </div>
+            <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
+              <Switch
+                id="import-consent"
+                checked={consent?.allowImportWithoutConsent ?? true}
+                disabled={!canManageSettings || savingConsent}
+                onCheckedChange={(checked) => {
+                  setSavingConsent(true);
+                  void updateSection("contact.consent", { allowImportWithoutConsent: checked }).finally(
+                    () => setSavingConsent(false),
+                  );
+                }}
+              />
+              <Label htmlFor="import-consent" className="text-[12px]">
+                Allow CSV imports that do not record consent
+              </Label>
+            </div>
             <dl className="grid gap-2 sm:grid-cols-3">
-              <Field label="Consent on file" value={formatNumber(stats.consented)} />
-              <Field label="No consent recorded" value={formatNumber(stats.total - stats.consented)} />
-              <Field label="Missing phone" value={formatNumber(stats.missingPhone)} />
+              <Field label="Consent on file" value={formatNumber(stats?.consented ?? 0)} />
+              <Field
+                label="No consent recorded"
+                value={formatNumber((stats?.total ?? 0) - (stats?.consented ?? 0))}
+              />
+              <Field label="Missing phone" value={formatNumber(stats?.missingPhone ?? 0)} />
             </dl>
             <Button asChild variant="outline" size="sm" className="self-start">
               <Link href="/outlets">Review consent records</Link>
@@ -343,9 +411,7 @@ export function SettingsScreen() {
                 <ScrollText className="size-3.5 text-muted-foreground" aria-hidden="true" />
                 Audit log
               </CardTitle>
-              <CardDescription>
-                Actions taken in this browser during the demo session.
-              </CardDescription>
+              <CardDescription>Recent actions recorded by the API.</CardDescription>
             </div>
             <Badge variant="outline">{formatNumber(store.activity.length)} events</Badge>
           </CardHeader>
@@ -373,69 +439,6 @@ export function SettingsScreen() {
           </CardContent>
         </Card>
       </div>
-
-      <Card>
-        <CardHeader>
-          <div>
-            <CardTitle className="flex items-center gap-1.5">
-              <FlaskConical className="size-3.5 text-muted-foreground" aria-hidden="true" />
-              Demo data
-            </CardTitle>
-            <CardDescription>
-              The prototype generates its dataset in the browser and stores your changes in local
-              storage.
-            </CardDescription>
-          </div>
-          <Badge variant={store.persisted ? "warning" : "outline"}>
-            {store.persisted ? "Changes saved locally" : "Fresh demo data"}
-          </Badge>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <ul className="flex flex-col gap-1.5 text-[12px] leading-5 text-muted-foreground">
-            <li className="flex items-start gap-2">
-              <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden="true" />
-              Outlet, campaign, template, segment and team changes are kept in this browser only.
-            </li>
-            <li className="flex items-start gap-2">
-              <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden="true" />
-              Clearing the demo data restores the original sample dataset.
-            </li>
-            <li className="flex items-start gap-2">
-              <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden="true" />
-              No WhatsApp messages are sent and no external service is contacted from this screen.
-            </li>
-          </ul>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setConfirmReset(true)}>
-              <RefreshCw aria-hidden="true" />
-              Reset demo data
-            </Button>
-            <span className="text-[11px] text-muted-foreground">
-              Resetting keeps your sidebar preference but clears everything else.
-            </span>
-          </div>
-        </CardContent>
-      </Card>
-
-      <ConfirmDialog
-        open={confirmReset}
-        onOpenChange={setConfirmReset}
-        title="Reset demo data?"
-        description={
-          <>
-            All locally saved outlets, edits, segments, campaigns, templates and team changes will be
-            replaced by the original sample dataset. Nothing outside this browser is affected.
-          </>
-        }
-        confirmLabel="Reset demo data"
-        destructive
-        onConfirm={() => {
-          store.resetDemoData();
-          toast.success("Demo data reset", {
-            description: "The sample dataset has been rebuilt.",
-          });
-        }}
-      />
     </div>
   );
 }

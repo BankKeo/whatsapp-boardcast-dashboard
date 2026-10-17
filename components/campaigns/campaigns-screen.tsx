@@ -14,7 +14,6 @@ import {
   Plus,
   RotateCcw,
   Send,
-  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { downloadFile, formatDate, formatNumber, formatPercent } from "@/lib/format";
@@ -23,14 +22,15 @@ import {
   CAMPAIGN_STATUS_FILTERS,
   campaignFilterCount,
   campaignProvinceLabel,
-  campaignReportRows,
-  campaignRowsToCsv,
-  filterCampaigns,
   type CampaignFilters,
 } from "@/lib/services/campaign-service";
-import { useDemoStore } from "@/lib/store/demo-store";
-import type { Campaign } from "@/types/campaign";
-import type { CampaignStatus } from "@/types/campaign";
+import { listCampaigns } from "@/lib/api/campaigns";
+import { exportReportCsv } from "@/lib/api/reports";
+import { ApiError } from "@/lib/api/client";
+import { useAsync } from "@/lib/hooks/use-async";
+import { useCampaignOwners } from "@/lib/hooks/use-campaign-owners";
+import { useAppStore } from "@/lib/store/app-store";
+import type { Campaign, CampaignStatus } from "@/types/campaign";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -67,29 +67,45 @@ const EMPTY_FILTERS: CampaignFilters = {
   owner: "all",
 };
 
+/** Statuses a campaign can be cancelled from (mirrors the API state machine). */
+const CANCELLABLE: CampaignStatus[] = ["Draft", "Pending Approval", "Scheduled"];
+
 export function CampaignsScreen() {
-  const store = useDemoStore();
+  const store = useAppStore();
+  const owners = useCampaignOwners();
   const [filters, setFilters] = React.useState<CampaignFilters>(EMPTY_FILTERS);
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(25);
   const [editTarget, setEditTarget] = React.useState<Campaign | null>(null);
-  const [deleteTarget, setDeleteTarget] = React.useState<Campaign | null>(null);
   const [cancelTarget, setCancelTarget] = React.useState<Campaign | null>(null);
-  const [simulateTarget, setSimulateTarget] = React.useState<Campaign | null>(null);
+  const [sendTarget, setSendTarget] = React.useState<Campaign | null>(null);
+  const [exporting, setExporting] = React.useState(false);
 
-  const filtered = React.useMemo(
-    () => filterCampaigns(store.campaigns, filters),
-    [store.campaigns, filters],
+  /*
+   * The API filters, sorts and pages campaigns, so a deployment with thousands
+   * of records behaves exactly like the demo did.
+   */
+  const query = useAsync(
+    (signal) =>
+      listCampaigns({
+        search: filters.search.trim() || undefined,
+        status: filters.status,
+        province: filters.province === "all" ? undefined : filters.province,
+        owner: filters.owner === "all" ? undefined : filters.owner,
+        from: filters.from ?? undefined,
+        to: filters.to ?? undefined,
+        page,
+        limit: pageSize,
+        sort: "createdAt",
+        direction: "desc",
+        signal,
+      }),
+    [filters, page, pageSize],
   );
-  const sorted = React.useMemo(
-    () =>
-      [...filtered].sort((a, b) =>
-        (a.sentAt ?? a.scheduledAt ?? a.createdAt) < (b.sentAt ?? b.scheduledAt ?? b.createdAt)
-          ? 1
-          : -1,
-      ),
-    [filtered],
-  );
+
+  const rows = query.data?.items ?? [];
+  const total = query.data?.total ?? 0;
+  const loading = query.loading && !query.data;
 
   /** Filter and pagination changes always return to the first page. */
   function updateFilters(patch: Partial<CampaignFilters>) {
@@ -101,18 +117,6 @@ export function CampaignsScreen() {
     setPageSize(size);
     setPage(1);
   }
-
-  const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize));
-  const currentPage = Math.min(page, pageCount);
-  const pageRows = React.useMemo(
-    () => sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize),
-    [sorted, currentPage, pageSize],
-  );
-
-  const owners = React.useMemo(
-    () => Array.from(new Set(store.campaigns.map((campaign) => campaign.owner))).sort(),
-    [store.campaigns],
-  );
 
   const columns = React.useMemo<DataTableColumn<Campaign>[]>(
     () => [
@@ -238,9 +242,8 @@ export function CampaignsScreen() {
           <MoreMenu
             campaign={campaign}
             onEdit={() => setEditTarget(campaign)}
-            onDelete={() => setDeleteTarget(campaign)}
             onCancel={() => setCancelTarget(campaign)}
-            onSimulate={() => setSimulateTarget(campaign)}
+            onSend={() => setSendTarget(campaign)}
           />
         ),
       },
@@ -248,7 +251,26 @@ export function CampaignsScreen() {
     [],
   );
 
-  if (!store.ready) {
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const csv = await exportReportCsv({
+        from: filters.from,
+        to: filters.to,
+        province: filters.province === "all" ? null : filters.province,
+      });
+      downloadFile("partner-club-campaigns.csv", csv, "text/csv");
+      toast.success("CSV export started", {
+        description: "Campaign performance rows were exported.",
+      });
+    } catch (cause) {
+      toast.error(cause instanceof ApiError ? cause.message : "The export failed.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  if (!query.data && loading) {
     return (
       <div className="flex flex-col gap-4">
         <PageHeader
@@ -260,18 +282,11 @@ export function CampaignsScreen() {
     );
   }
 
-  const statusCounts = CAMPAIGN_STATUS_FILTERS.filter((status) => status !== "all").map(
-    (status) => ({
-      status: status as CampaignStatus,
-      count: store.campaigns.filter((campaign) => campaign.status === status).length,
-    }),
-  );
-
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Campaigns"
-        description="Every Partner Club campaign with its audience, owner, schedule and simulated delivery metrics."
+        description="Every Partner Club campaign with its audience, owner, schedule and delivery metrics."
         headerAction={
           <Button asChild size="sm">
             <Link href="/campaigns/new">
@@ -282,15 +297,12 @@ export function CampaignsScreen() {
         }
         meta={
           <div className="flex flex-wrap items-center gap-1.5">
-            {statusCounts.map((entry) => (
-              <Badge
-                key={entry.status}
-                variant={entry.count > 0 ? "outline" : "secondary"}
-                className="tabular-nums"
-              >
-                {entry.status}: {entry.count}
-              </Badge>
-            ))}
+            <Badge variant="outline" className="tabular-nums">
+              {formatNumber(total)} campaigns
+            </Badge>
+            <Badge variant={store.health?.simulated ? "warning" : "success"}>
+              {store.health?.simulated ? "Sends simulated" : "Provider connected"}
+            </Badge>
           </div>
         }
       />
@@ -405,7 +417,7 @@ export function CampaignsScreen() {
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2.5 text-[12px] text-muted-foreground">
           <span>
             <span className="font-semibold tabular-nums text-foreground">
-              {formatNumber(sorted.length)}
+              {formatNumber(total)}
             </span>{" "}
             campaigns
             {campaignFilterCount(filters) > 0
@@ -415,54 +427,57 @@ export function CampaignsScreen() {
           <Button
             variant="outline"
             size="sm"
-            disabled={sorted.length === 0}
-            onClick={() => {
-              downloadFile(
-                "partner-club-campaigns.csv",
-                campaignRowsToCsv(campaignReportRows(sorted)),
-                "text/csv",
-              );
-              toast.success("CSV export started", {
-                description: `${formatNumber(sorted.length)} filtered campaigns exported.`,
-              });
-            }}
+            disabled={exporting || total === 0}
+            onClick={() => void handleExport()}
           >
             <Download aria-hidden="true" />
-            Export campaigns CSV
+            {exporting ? "Exporting…" : "Export campaigns CSV"}
           </Button>
         </div>
       </Card>
 
       <div>
-        <DataTable
-          columns={columns}
-          rows={pageRows}
-          getRowId={(campaign) => campaign.id}
-          caption="Campaigns"
-          empty={{
-            icon: <Megaphone aria-hidden="true" />,
-            title: "No campaigns match these filters",
-            description: "Clear the filters or create a new campaign.",
-            action: (
-              <Button asChild size="sm">
-                <Link href="/campaigns/new">
-                  <Plus aria-hidden="true" />
-                  Create campaign
-                </Link>
-              </Button>
-            ),
-          }}
-        />
-        <div className="-mt-px rounded-b-lg border border-t-0 border-border bg-card">
-          <DataTablePagination
-            page={currentPage}
-            pageSize={pageSize}
-            totalRows={sorted.length}
-            onPageChange={setPage}
-            onPageSizeChange={changePageSize}
-            noun="campaigns"
-          />
-        </div>
+        {query.error ? (
+          <Card className="flex flex-col items-center gap-2 px-4 py-8 text-center">
+            <p className="text-[13px] font-medium text-destructive">{query.error}</p>
+            <Button variant="outline" size="sm" onClick={query.reload}>
+              Try again
+            </Button>
+          </Card>
+        ) : (
+          <>
+            <DataTable
+              columns={columns}
+              rows={rows}
+              getRowId={(campaign) => campaign.id}
+              isLoading={loading}
+              caption="Campaigns"
+              empty={{
+                icon: <Megaphone aria-hidden="true" />,
+                title: "No campaigns match these filters",
+                description: "Clear the filters or create a new campaign.",
+                action: (
+                  <Button asChild size="sm">
+                    <Link href="/campaigns/new">
+                      <Plus aria-hidden="true" />
+                      Create campaign
+                    </Link>
+                  </Button>
+                ),
+              }}
+            />
+            <div className="-mt-px rounded-b-lg border border-t-0 border-border bg-card">
+              <DataTablePagination
+                page={page}
+                pageSize={pageSize}
+                totalRows={total}
+                onPageChange={setPage}
+                onPageSizeChange={changePageSize}
+                noun="campaigns"
+              />
+            </div>
+          </>
+        )}
       </div>
 
       <CampaignEditDialog
@@ -478,69 +493,66 @@ export function CampaignsScreen() {
         onOpenChange={(open) => {
           if (!open) setCancelTarget(null);
         }}
-        title="Cancel this scheduled campaign?"
+        title="Cancel this campaign?"
         description={
           <>
             “{cancelTarget?.name}” will move to Cancelled. Its audience snapshot and any metrics are
-            kept for reporting. In a live integration, cancelling prevents the queued send.
+            kept for reporting, and a queued send will not go out.
           </>
         }
         confirmLabel="Cancel campaign"
-        onConfirm={() => {
-          if (!cancelTarget) return;
-          store.updateCampaign(cancelTarget.id, { status: "Cancelled" });
-          store.logActivity(
-            "campaign",
-            `Scheduled campaign “${cancelTarget.name}” was cancelled before sending.`,
-          );
-          toast.success("Campaign cancelled", { description: cancelTarget.name });
-          setCancelTarget(null);
-        }}
-      />
-
-      <ConfirmDialog
-        open={simulateTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setSimulateTarget(null);
-        }}
-        title="Simulate this send?"
-        description={
-          <>
-            Demo metrics will be generated locally for “{simulateTarget?.name}” and no WhatsApp
-            messages will be delivered. A real send requires the WhatsApp Business Platform
-            integration.
-          </>
-        }
-        confirmLabel="Simulate send"
-        onConfirm={() => {
-          if (!simulateTarget) return;
-          store.simulateSend(simulateTarget.id);
-          toast.success("Demo send simulated", {
-            description: `${simulateTarget.name} — metrics generated locally.`,
-          });
-          setSimulateTarget(null);
-        }}
-      />
-
-      <ConfirmDialog
-        open={deleteTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setDeleteTarget(null);
-        }}
-        title="Delete this draft?"
-        description={
-          <>
-            “{deleteTarget?.name}” will be removed from this browser. Campaigns that were already
-            sent are kept for reporting — cancel or archive them instead.
-          </>
-        }
-        confirmLabel="Delete draft"
         destructive
         onConfirm={() => {
-          if (!deleteTarget) return;
-          store.deleteCampaign(deleteTarget.id);
-          toast.success("Draft deleted", { description: deleteTarget.name });
-          setDeleteTarget(null);
+          if (!cancelTarget) return;
+          const target = cancelTarget;
+          setCancelTarget(null);
+          void store
+            .cancelCampaign(target.id)
+            .then(() => {
+              toast.success("Campaign cancelled", { description: target.name });
+              query.reload();
+            })
+            .catch((cause: unknown) =>
+              toast.error(
+                cause instanceof ApiError ? cause.message : "The campaign could not be cancelled.",
+              ),
+            );
+        }}
+      />
+
+      <ConfirmDialog
+        open={sendTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setSendTarget(null);
+        }}
+        title={store.health?.simulated ? "Run a simulated send?" : "Send this campaign now?"}
+        description={
+          <>
+            The API will resolve the audience again, deduplicate to one message per number and apply
+            the daily per-contact cap.{" "}
+            {store.health?.simulated
+              ? "The mock provider reports delivery without contacting WhatsApp."
+              : "Messages will be sent through the connected WhatsApp provider."}
+          </>
+        }
+        confirmLabel={store.health?.simulated ? "Run simulated send" : "Send now"}
+        onConfirm={() => {
+          if (!sendTarget) return;
+          const target = sendTarget;
+          setSendTarget(null);
+          void (async () => {
+            try {
+              await store.submitCampaign(target.id);
+              await store.approveCampaign(target.id);
+              await store.sendCampaign(target.id);
+              toast.success("Send started", { description: target.name });
+              query.reload();
+            } catch (cause) {
+              toast.error(
+                cause instanceof ApiError ? cause.message : "The campaign could not be sent.",
+              );
+            }
+          })();
         }}
       />
     </div>
@@ -550,19 +562,17 @@ export function CampaignsScreen() {
 function MoreMenu({
   campaign,
   onEdit,
-  onDelete,
   onCancel,
-  onSimulate,
+  onSend,
 }: {
   campaign: Campaign;
   onEdit: () => void;
-  onDelete: () => void;
   onCancel: () => void;
-  onSimulate: () => void;
+  onSend: () => void;
 }) {
-  const store = useDemoStore();
-  const isDraft = campaign.status === "Draft";
-  const isScheduled = campaign.status === "Scheduled";
+  const store = useAppStore();
+  const cancellable = CANCELLABLE.includes(campaign.status);
+  const sendable = campaign.status === "Draft" || campaign.status === "Scheduled";
 
   return (
     <div className="flex items-center justify-end gap-1">
@@ -589,34 +599,38 @@ function MoreMenu({
           </DropdownMenuItem>
           <DropdownMenuItem
             onSelect={() => {
-              const copy = store.duplicateCampaign(campaign.id);
-              if (copy) {
-                toast.success("Campaign duplicated", {
-                  description: `“${copy.name}” was created as a draft.`,
-                });
-              }
+              void store
+                .duplicateCampaign(campaign.id)
+                .then((copy) =>
+                  toast.success("Campaign duplicated", {
+                    description: `“${copy.name}” was created as a draft.`,
+                  }),
+                )
+                .catch((cause: unknown) =>
+                  toast.error(
+                    cause instanceof ApiError ? cause.message : "The campaign could not be duplicated.",
+                  ),
+                );
             }}
           >
             <Copy aria-hidden="true" />
             Duplicate as draft
           </DropdownMenuItem>
-          {isScheduled ? (
-            <DropdownMenuItem onSelect={onCancel}>
-              <Ban aria-hidden="true" />
-              Cancel schedule
-            </DropdownMenuItem>
-          ) : null}
-          {!campaign.sentAt ? (
-            <DropdownMenuItem onSelect={onSimulate}>
+          {sendable ? (
+            <DropdownMenuItem onSelect={onSend}>
               <Send aria-hidden="true" />
-              Simulate send
+              Send now
             </DropdownMenuItem>
           ) : null}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem variant="destructive" disabled={!isDraft} onSelect={onDelete}>
-            <Trash2 aria-hidden="true" />
-            Delete draft
-          </DropdownMenuItem>
+          {cancellable ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" onSelect={onCancel}>
+                <Ban aria-hidden="true" />
+                Cancel campaign
+              </DropdownMenuItem>
+            </>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

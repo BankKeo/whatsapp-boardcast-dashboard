@@ -7,9 +7,12 @@ import { AlertTriangle, Info } from "lucide-react";
 import { toast } from "sonner";
 import { districtsFor, PROVINCES } from "@/lib/data/constants";
 import { formatPhone, normalizeLaoPhone, phoneDigits } from "@/lib/phone";
+import { listOutlets } from "@/lib/api/outlets";
+import { ApiError } from "@/lib/api/client";
+import { useAsync } from "@/lib/hooks/use-async";
 import { outletFormSchema, type OutletFormValues } from "@/lib/schemas/outlet";
-import { useDemoStore } from "@/lib/store/demo-store";
-import { OUTLET_CATEGORIES, OUTLET_CHANNELS, OUTLET_STATUSES, type Outlet } from "@/types/outlet";
+import { useAppStore } from "@/lib/store/app-store";
+import { OUTLET_CATEGORIES, OUTLET_CHANNELS, OUTLET_STATUSES, type Outlet, type OutletFilters } from "@/types/outlet";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -40,6 +43,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+
+/** Only the free-text term is used for the duplicate lookup. */
+const NO_FILTERS: OutletFilters = {
+  search: "",
+  provinces: [],
+  districts: [],
+  categories: [],
+  eligibility: "any",
+  consent: "any",
+  phoneStatus: "any",
+  dataQuality: "any",
+};
 
 function defaultsFor(outlet: Outlet | null): OutletFormValues {
   if (outlet) {
@@ -82,7 +97,7 @@ export interface OutletFormDialogProps {
 }
 
 export function OutletFormDialog({ open, onOpenChange, outlet = null }: OutletFormDialogProps) {
-  const store = useDemoStore();
+  const store = useAppStore();
   const isEdit = Boolean(outlet);
 
   const form = useForm<OutletFormValues>({
@@ -99,27 +114,49 @@ export function OutletFormDialog({ open, onOpenChange, outlet = null }: OutletFo
   const phone = form.watch("phone");
   const districts = districtsFor(province);
 
-  const duplicateOf = React.useMemo(() => {
-    const normalized = normalizeLaoPhone(phone ?? "");
+  /*
+   * Duplicate detection is a server lookup: the register is paginated, so the
+   * browser cannot compare against every record. The check runs on the
+   * normalised number and ignores the record being edited.
+   */
+  const normalized = normalizeLaoPhone(phone ?? "");
+  const duplicateOf = useAsync(async (signal) => {
     if (!normalized) return null;
     const digits = phoneDigits(normalized);
-    const match = store.outlets.find(
-      (candidate) => candidate.id !== outlet?.id && phoneDigits(candidate.phone) === digits,
+    const { items } = await listOutlets({
+      filters: { ...NO_FILTERS, search: digits },
+      limit: 10,
+      signal,
+    });
+    return (
+      items.find(
+        (candidate) => candidate.id !== outlet?.id && phoneDigits(candidate.phone) === digits,
+      ) ?? null
     );
-    return match ?? null;
-  }, [phone, store.outlets, outlet?.id]);
+  }, [normalized, outlet?.id]).data;
 
-  const onSubmit = form.handleSubmit((values) => {
-    if (isEdit && outlet) {
-      store.updateOutlet(outlet.id, values);
-      toast.success("Outlet updated", { description: `${values.name} has been saved.` });
-    } else {
-      store.createOutlet(values);
-      toast.success("Outlet added", {
-        description: `${values.name} is now in the outlet database.`,
-      });
+  const onSubmit = form.handleSubmit(async (values) => {
+    try {
+      if (isEdit && outlet) {
+        await store.updateOutlet(outlet.id, values);
+        toast.success("Outlet updated", { description: `${values.name} has been saved.` });
+      } else {
+        await store.createOutlet(values);
+        toast.success("Outlet added", {
+          description: `${values.name} is now in the outlet register.`,
+        });
+      }
+      onOpenChange(false);
+    } catch (cause) {
+      if (cause instanceof ApiError && Object.keys(cause.fieldErrors).length > 0) {
+        for (const [field, message] of Object.entries(cause.fieldErrors)) {
+          form.setError(field as keyof OutletFormValues, { type: "server", message });
+        }
+      }
+      toast.error(
+        cause instanceof ApiError ? cause.message : "The outlet could not be saved.",
+      );
     }
-    onOpenChange(false);
   });
 
   return (

@@ -6,7 +6,7 @@ import { formatNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { PROVINCES, districtsFor } from "@/lib/data/constants";
 import { activeFilterCount } from "@/lib/services/outlet-service";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { useAppStore } from "@/lib/store/app-store";
 import {
   DATA_QUALITY_LEVELS,
   OUTLET_CATEGORIES,
@@ -44,18 +44,18 @@ export function OutletFiltersToolbar({
   showAdvancedByDefault = false,
   children,
 }: OutletFiltersToolbarProps) {
-  const store = useDemoStore();
+  const { outletStats } = useAppStore();
   const [showAdvanced, setShowAdvanced] = React.useState(showAdvancedByDefault);
   const activeCount = activeFilterCount(filters);
 
   const provinceOptions = React.useMemo(
     () =>
-      store.outletStats.byProvince.map((entry) => ({
+      (outletStats?.byProvince ?? []).map((entry) => ({
         value: entry.province,
         label: entry.province,
         hint: formatNumber(entry.count),
       })),
-    [store.outletStats.byProvince],
+    [outletStats],
   );
 
   const districtOptions = React.useMemo(() => {
@@ -127,7 +127,7 @@ export function OutletFiltersToolbar({
               value: category,
               label: category,
               hint: formatNumber(
-                store.outletStats.byCategory.find((entry) => entry.category === category)?.count ?? 0,
+                (outletStats?.byCategory ?? []).find((entry) => entry.category === category)?.count ?? 0,
               ),
             }))}
             selected={filters.categories}

@@ -4,9 +4,11 @@ import * as React from "react";
 import { AlertTriangle, CheckCircle2, ImageIcon, Wand2 } from "lucide-react";
 import { formatNumber } from "@/lib/format";
 import { renderTemplate, variablesForBody } from "@/lib/services/template-service";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { previewSegment } from "@/lib/api/segments";
+import { useAsync } from "@/lib/hooks/use-async";
+import { useAppStore } from "@/lib/store/app-store";
 import { TEMPLATE_VARIABLE_LIBRARY, type TemplateLanguage } from "@/types/template";
-import type { OutletFilters } from "@/types/outlet";
+import { isDeliverable, type OutletFilters } from "@/types/outlet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,7 +39,7 @@ export interface MessageComposerProps {
 }
 
 export function MessageComposer({ value, onChange, audienceFilters }: MessageComposerProps) {
-  const store = useDemoStore();
+  const store = useAppStore();
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
 
   const selectedTemplate = React.useMemo(
@@ -45,21 +47,9 @@ export function MessageComposer({ value, onChange, audienceFilters }: MessageCom
     [store.templates, value.templateId],
   );
 
-  const sampleOutlet = React.useMemo(() => {
-    const matched = store.outlets.filter((outlet) => {
-      if (audienceFilters.provinces.length > 0 && !audienceFilters.provinces.includes(outlet.province)) {
-        return false;
-      }
-      if (
-        audienceFilters.categories.length > 0 &&
-        !audienceFilters.categories.includes(outlet.category)
-      ) {
-        return false;
-      }
-      return outlet.whatsappVerified && outlet.marketingConsent;
-    });
-    return matched[0] ?? null;
-  }, [store.outlets, audienceFilters]);
+  // The preview uses a real deliverable contact, resolved by the API.
+  const preview = useAsync((signal) => previewSegment(audienceFilters, 8, signal), [audienceFilters]);
+  const sampleOutlet = (preview.data?.sample ?? []).find(isDeliverable) ?? null;
 
   const rendered = React.useMemo(
     () => renderTemplate(value.message, { outlet: sampleOutlet ?? undefined }),
@@ -123,7 +113,7 @@ export function MessageComposer({ value, onChange, audienceFilters }: MessageCom
     !selectedTemplate
       ? "No template selected. Campaigns should use an approved template before they are submitted."
       : selectedTemplate.status !== "Approved"
-        ? `Template status is “${selectedTemplate.status}”. Only locally approved templates can be used in a demo send.`
+        ? `Template status is “${selectedTemplate.status}”. Only approved templates can be dispatched.`
         : null;
 
   return (
@@ -190,7 +180,10 @@ export function MessageComposer({ value, onChange, audienceFilters }: MessageCom
                 </span>
                 {selectedTemplate.status === "Approved" ? (
                   <span className="text-[11px] text-muted-foreground">
-                    · Locally approved for the prototype; WhatsApp review is not connected.
+                    · Approved on the API.{" "}
+                    {store.health?.simulated
+                      ? "Sends are simulated by the mock WhatsApp provider."
+                      : "Sends go through the connected provider."}
                   </span>
                 ) : null}
               </div>
@@ -204,7 +197,7 @@ export function MessageComposer({ value, onChange, audienceFilters }: MessageCom
             ) : (
               <p className="flex items-start gap-2 text-[12px] leading-5 text-success">
                 <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-                Template approved locally for this prototype.
+                Template is approved and ready to dispatch.
               </p>
             )}
 
@@ -262,9 +255,9 @@ export function MessageComposer({ value, onChange, audienceFilters }: MessageCom
               <div className="flex flex-col gap-0.5">
                 <p className="text-[12px] font-medium">Promotional image</p>
                 <p className="text-[11px] leading-5 text-muted-foreground">
-                  No approved promotional asset is loaded in this prototype, so the campaign is text
-                  only. Image headers require an approved media asset from the WhatsApp Business
-                  Platform; asset management is part of Phase 3.
+                  Campaigns here are text only: image headers require an approved media asset
+                  uploaded through the WhatsApp Business Platform, which this dashboard does not
+                  manage yet.
                 </p>
               </div>
             </div>
@@ -278,7 +271,7 @@ export function MessageComposer({ value, onChange, audienceFilters }: MessageCom
             <div>
               <CardTitle>WhatsApp preview</CardTitle>
               <CardDescription>
-                Rendered with sample values from the demo dataset
+                Rendered with sample values from a matching contact
                 {sampleOutlet ? ` (${sampleOutlet.name})` : ""}.
               </CardDescription>
             </div>
@@ -326,8 +319,8 @@ export function MessageComposer({ value, onChange, audienceFilters }: MessageCom
               ) : (
                 <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden="true" />
               )}
-              No prices or monetary claims detected. Product offers, prices and approved claims are
-              out of scope for this prototype.
+              No prices or monetary claims detected. Product offers and prices need compliance
+              sign-off before they can be included.
             </p>
             {value.language === "lo" ? (
               <p className="text-[11px] text-muted-foreground">

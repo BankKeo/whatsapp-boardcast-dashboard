@@ -20,8 +20,13 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDateTime, formatNumber } from "@/lib/format";
-import { CURRENT_USER, CAMPAIGN_OWNERS } from "@/lib/data/constants";
-import { audienceBreakdown } from "@/lib/services/outlet-service";
+import { fetchAudienceBreakdown } from "@/lib/api/outlets";
+import { previewSegment } from "@/lib/api/segments";
+import type { CampaignCreateValues } from "@/lib/api/campaigns";
+import { ApiError } from "@/lib/api/client";
+import { useAsync } from "@/lib/hooks/use-async";
+import { useCampaignOwners } from "@/lib/hooks/use-campaign-owners";
+import { useSession } from "@/lib/auth/session";
 import {
   campaignAudienceSchema,
   campaignDetailsSchema,
@@ -30,8 +35,9 @@ import {
   type CampaignAudienceValues,
   type CampaignDetailsValues,
 } from "@/lib/schemas/campaign";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { useAppStore } from "@/lib/store/app-store";
 import { createEmptyFilters } from "@/types/segment";
+import { isDeliverable } from "@/types/outlet";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -80,6 +86,7 @@ function CampaignDetailsStep({
   defaults: CampaignDetailsValues;
   onValid: (values: CampaignDetailsValues) => void;
 }) {
+  const owners = useCampaignOwners();
   const form = useForm<CampaignDetailsValues>({
     resolver: zodResolver(campaignDetailsSchema),
     defaultValues: defaults,
@@ -175,13 +182,11 @@ function CampaignDetailsStep({
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {[CURRENT_USER.name, ...CAMPAIGN_OWNERS]
-                        .filter((name, index, all) => all.indexOf(name) === index)
-                        .map((name) => (
-                          <SelectItem key={name} value={name}>
-                            {name}
-                          </SelectItem>
-                        ))}
+                      {owners.map((name) => (
+                        <SelectItem key={name} value={name}>
+                          {name}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -217,16 +222,28 @@ export interface CampaignWizardProps {
   initialSegmentId?: string | null;
 }
 
+const EMPTY_BREAKDOWN = {
+  matched: 0,
+  eligible: 0,
+  consented: 0,
+  deliverable: 0,
+  unreachable: 0,
+  withoutConsent: 0,
+  notVerified: 0,
+};
+
 export function CampaignWizard({ initialDetails, initialSegmentId = null }: CampaignWizardProps) {
-  const store = useDemoStore();
+  const store = useAppStore();
+  const { user } = useSession();
   const router = useRouter();
+  const currentUserName = user?.name ?? "";
   const [step, setStep] = React.useState(0);
   const [details, setDetails] = React.useState<CampaignDetailsValues>(
     initialDetails ?? {
       name: "",
       objective: "Seasonal promotion",
       description: "",
-      owner: CURRENT_USER.name,
+      owner: currentUserName,
     },
   );
   const [audience, setAudience] = React.useState<CampaignAudienceValues>(() => {
@@ -251,17 +268,18 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
   const [scheduledDate, setScheduledDate] = React.useState<string | null>(null);
   const [scheduledTime, setScheduledTime] = React.useState("09:00");
   const [confirmed, setConfirmed] = React.useState(false);
+  const [running, setRunning] = React.useState(false);
   const [result, setResult] = React.useState<{
     campaignId: string;
     outcome: string;
     metrics: { delivered: number; failed: number; attempted: number } | null;
   } | null>(null);
 
-  // Deep link support: /campaigns/new#segment=seg-001 or #template=tpl-001
+  // Deep link support: /campaigns/new#segment=<id> or #template=<id>
   React.useEffect(() => {
     if (!store.ready) return;
-    const segmentMatch = window.location.hash.match(/^#segment=(seg-[\w-]+)$/i);
-    const templateMatch = window.location.hash.match(/^#template=(tpl-[\w-]+)$/i);
+    const segmentMatch = window.location.hash.match(/^#segment=([\w-]+)$/i);
+    const templateMatch = window.location.hash.match(/^#template=([\w-]+)$/i);
     if (segmentMatch) {
       const segment = store.segments.find((item) => item.id === segmentMatch[1]);
       if (segment) {
@@ -290,29 +308,23 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
     }
   }, [store.ready, store.segments, store.templates]);
 
-  const breakdown = React.useMemo(
-    () => audienceBreakdown(store.outlets, audience.filters),
-    [store.outlets, audience.filters],
+  // The audience is resolved by the API whenever the rules change.
+  const audiencePreview = useAsync(
+    (signal) => fetchAudienceBreakdown(audience.filters, signal),
+    [audience.filters],
   );
+  const breakdown = audiencePreview.data ?? EMPTY_BREAKDOWN;
 
   const template = React.useMemo(
     () => store.templates.find((item) => item.id === message.templateId) ?? null,
     [store.templates, message.templateId],
   );
 
-  const sampleOutlet = React.useMemo(
-    () =>
-      store.outlets.find(
-        (outlet) =>
-          outlet.whatsappVerified &&
-          outlet.marketingConsent &&
-          (audience.filters.provinces.length === 0 ||
-            audience.filters.provinces.includes(outlet.province)) &&
-          (audience.filters.categories.length === 0 ||
-            audience.filters.categories.includes(outlet.category)),
-      ) ?? null,
-    [store.outlets, audience.filters],
+  const samplePreview = useAsync(
+    (signal) => previewSegment(audience.filters, 8, signal),
+    [audience.filters],
   );
+  const sampleOutlet = (samplePreview.data?.sample ?? []).find(isDeliverable) ?? null;
 
   const scheduledAt = React.useMemo(() => {
     if (!scheduledDate) return null;
@@ -322,6 +334,10 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
     return Number.isNaN(combined.getTime()) ? null : combined.toISOString();
   }, [scheduledDate, scheduledTime]);
 
+  const pricingConfigured =
+    (store.settings?.["reporting.pricing"]?.value as { configured?: boolean } | undefined)
+      ?.configured ?? false;
+
   const warnings = React.useMemo(
     () =>
       buildCampaignWarnings({
@@ -330,8 +346,9 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
         template,
         breakdown,
         scheduledAt,
+        pricingConfigured,
       }),
-    [details, message, template, breakdown, scheduledAt],
+    [details, message, template, breakdown, scheduledAt, pricingConfigured],
   );
   const blockingWarnings = warnings.filter((warning) => warning.severity === "blocking");
 
@@ -372,18 +389,85 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
     setStep(next);
   }
 
-  function draft(recipients: number) {
+  function buildPayload(): CampaignCreateValues {
     return {
       details,
-      audience: { ...audience, recipients },
+      audience: { ...audience, filters: audience.filters },
       message: {
         templateId: message.templateId,
-        templateName: template?.name ?? message.templateName,
         language: message.language,
         message: message.message,
       },
       scheduledAt,
+      idempotencyKey: `wizard-${crypto.randomUUID()}`,
     };
+  }
+
+  /**
+   * Run one of the wizard actions.
+   *
+   * The API owns the campaign state machine, so submitting, scheduling and
+   * sending are separate transitions rather than local status writes.
+   */
+  async function runAction(
+    action: "draft" | "submit" | "schedule" | "send",
+  ): Promise<void> {
+    if (running) return;
+    setRunning(true);
+    try {
+      const created = await store.createCampaign(buildPayload());
+      let campaign = created;
+
+      if (action === "submit" || action === "send") {
+        campaign = await store.submitCampaign(campaign.id);
+      }
+      if (action === "send") {
+        campaign = await store.approveCampaign(campaign.id);
+        campaign = await store.sendCampaign(campaign.id);
+      }
+      if (action === "schedule" && scheduledAt) {
+        campaign = await store.scheduleCampaign(campaign.id, {
+          scheduledAt,
+          language: message.language,
+        });
+      }
+
+      const outcome =
+        action === "draft"
+          ? "Saved as draft"
+          : action === "submit"
+            ? "Submitted for approval"
+            : action === "schedule"
+              ? "Scheduled"
+              : campaign.simulated
+                ? "Simulated send started"
+                : "Send started";
+
+      toast.success(outcome, {
+        description:
+          action === "send"
+            ? "The API is dispatching to eligible, consented contacts."
+            : "The campaign was recorded on the server.",
+      });
+
+      finish(
+        outcome,
+        campaign.id,
+        campaign.metrics
+          ? {
+              attempted: campaign.metrics.attempted,
+              delivered: campaign.metrics.delivered,
+              failed: campaign.metrics.failed,
+            }
+          : null,
+      );
+    } catch (cause) {
+      toast.error(
+        cause instanceof ApiError ? cause.message : "The campaign could not be saved.",
+      );
+    } finally {
+      setRunning(false);
+    }
   }
 
   function finish(outcome: string, campaignId: string, metrics: { delivered: number; failed: number; attempted: number } | null) {
@@ -394,7 +478,7 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
   if (!store.ready) {
     return (
       <div className="flex flex-col gap-4">
-        <PageHeader title="Create campaign" description="Loading the demo dataset…" />
+        <PageHeader title="Create campaign" description="Loading campaign data…" />
         <LoadingState variant="page" />
       </div>
     );
@@ -489,7 +573,7 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
                     name: "",
                     objective: "Seasonal promotion",
                     description: "",
-                    owner: CURRENT_USER.name,
+                    owner: currentUserName,
                   });
                   setAudience({ ...emptyCampaignAudience(), filters: createEmptyFilters() });
                   setMessage({ templateId: "", templateName: null, language: "en", message: "" });
@@ -600,8 +684,8 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
               <div>
                 <CardTitle>Send or schedule</CardTitle>
                 <CardDescription>
-                  Save the campaign as a draft, submit it for approval, schedule it, or run a
-                  simulated demo send.
+                  Save the campaign as a draft, submit it for approval, schedule it, or dispatch
+                  it now.
                 </CardDescription>
               </div>
             </CardHeader>
@@ -654,13 +738,8 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => {
-                    const campaign = store.createCampaign(draft(breakdown.deliverable), "Draft");
-                    toast.success("Draft saved", {
-                      description: "The campaign is stored in this browser as a draft.",
-                    });
-                    finish("Saved as draft", campaign.id, null);
-                  }}
+                  disabled={running}
+                  onClick={() => void runAction("draft")}
                 >
                   <Save aria-hidden="true" />
                   Save draft
@@ -668,18 +747,8 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={blockingWarnings.length > 0}
-                  onClick={() => {
-                    const campaign = store.createCampaign(
-                      draft(breakdown.deliverable),
-                      "Pending Approval",
-                    );
-                    toast.success("Submitted for approval", {
-                      description:
-                        "Approval is a local workflow in this prototype — no external system is contacted.",
-                    });
-                    finish("Submitted for approval", campaign.id, null);
-                  }}
+                  disabled={running || blockingWarnings.length > 0}
+                  onClick={() => void runAction("submit")}
                 >
                   <ClipboardList aria-hidden="true" />
                   Submit for approval
@@ -687,55 +756,25 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={!scheduledAt || blockingWarnings.length > 0}
-                  onClick={() => {
-                    const campaign = store.createCampaign(
-                      draft(breakdown.deliverable),
-                      "Scheduled",
-                    );
-                    toast.success("Campaign scheduled", {
-                      description: `Scheduled for ${formatDateTime(scheduledAt)} in demo mode.`,
-                    });
-                    finish("Scheduled", campaign.id, null);
-                  }}
+                  disabled={running || !scheduledAt || blockingWarnings.length > 0}
+                  onClick={() => void runAction("schedule")}
                 >
                   <CalendarClock aria-hidden="true" />
                   Schedule campaign
                 </Button>
                 <Button
                   size="sm"
-                  disabled={!confirmed || blockingWarnings.length > 0}
-                  onClick={() => {
-                    const campaign = store.createCampaign(
-                      draft(breakdown.deliverable),
-                      "Draft",
-                      { simulate: true },
-                    );
-                    toast.success("Demo send simulated", {
-                      description:
-                        "Metrics were generated locally. No WhatsApp messages were delivered.",
-                    });
-                    finish(
-                      "Demo send simulated",
-                      campaign.id,
-                      campaign.metrics
-                        ? {
-                            attempted: campaign.metrics.attempted,
-                            delivered: campaign.metrics.delivered,
-                            failed: campaign.metrics.failed,
-                          }
-                        : null,
-                    );
-                  }}
+                  disabled={running || !confirmed || blockingWarnings.length > 0}
+                  onClick={() => void runAction("send")}
                 >
                   <Send aria-hidden="true" />
-                  Simulate send
+                  {store.health?.simulated ? "Simulate send" : "Send now"}
                 </Button>
               </div>
 
               {!confirmed ? (
                 <p className="text-[11px] text-muted-foreground">
-                  Confirm the demo notice on the review step to enable “Simulate send”.
+                  Confirm the notice on the review step to enable sending.
                 </p>
               ) : null}
             </CardContent>
@@ -751,19 +790,20 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
             <CardContent className="flex flex-col gap-2 text-[12px] leading-5 text-muted-foreground">
               <p>
                 <span className="font-medium text-foreground">Save draft</span> stores the campaign
-                so it can be finished later.
+                on the server so it can be finished later.
               </p>
               <p>
                 <span className="font-medium text-foreground">Submit for approval</span> moves it to
-                pending approval for the marketing manager.
+                pending approval. An Administrator or Marketing Manager then approves it.
               </p>
               <p>
                 <span className="font-medium text-foreground">Schedule campaign</span> records the
-                send time. Real scheduling requires the WhatsApp Business Platform integration.
+                send time; the server dispatches due campaigns automatically.
               </p>
               <p>
-                <span className="font-medium text-foreground">Simulate send</span> generates demo
-                delivery metrics in this browser so reports can be demonstrated.
+                <span className="font-medium text-foreground">Simulate send</span> runs the full
+                dispatch through the mock provider, which reports delivery without contacting
+                WhatsApp.
               </p>
             </CardContent>
           </Card>

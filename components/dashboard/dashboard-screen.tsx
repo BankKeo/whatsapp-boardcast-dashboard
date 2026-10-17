@@ -4,10 +4,14 @@ import * as React from "react";
 import Link from "next/link";
 import { Activity, BadgeCheck, BarChart3, CheckCircle2, Megaphone, Send, Store, Upload, Users, XCircle } from "lucide-react";
 import { formatNumber, formatPercent } from "@/lib/format";
-import { campaignsThisMonth, computeDaySeries, denseDaySeries, emptySummary, summarize } from "@/lib/services/campaign-service";
-import { useDemoStore } from "@/lib/store/demo-store";
-import { COMPANY, DEMO_TOTALS } from "@/lib/data/constants";
-import type { CampaignDaySeries } from "@/types/campaign";
+import { listCampaigns } from "@/lib/api/campaigns";
+import { campaignPerformance, reportOverview } from "@/lib/api/reports";
+import { useAsync } from "@/lib/hooks/use-async";
+import { useAppStore } from "@/lib/store/app-store";
+import { COMPANY } from "@/lib/data/constants";
+import { denseDaySeries, emptySummary } from "@/lib/services/campaign-service";
+import type { Campaign, CampaignDaySeries, CampaignSummary } from "@/types/campaign";
+import { EMPTY_OUTLET_STATS } from "@/types/outlet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,7 +22,6 @@ import { CampaignPerformanceChart } from "./campaign-performance-chart";
 import { RecentCampaignsTable } from "./recent-campaigns-table";
 import { OutletDistribution } from "./outlet-distribution";
 import { ContactDataQuality } from "./contact-quality";
-import { RecentActivity } from "./recent-activity";
 import { ImportOutletsDialog } from "@/components/outlets/import-outlets-dialog";
 
 const DAY = 86_400_000;
@@ -28,51 +31,105 @@ function percentDelta(current: number, previous: number) {
   return (current - previous) / previous;
 }
 
+function isoDay(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+/** Sum per-day delivered/sent/failed from campaign performance rows. */
+function seriesFromRows(
+  rows: { sentAt: string | null; delivered: number; sent: number; failed: number }[],
+  days: number,
+): CampaignDaySeries[] {
+  const buckets = new Map<string, CampaignDaySeries>();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const date = new Date(today.getTime() - offset * DAY);
+    const key = isoDay(date);
+    buckets.set(key, {
+      date: key,
+      label: new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(date),
+      sent: 0,
+      delivered: 0,
+      failed: 0,
+    });
+  }
+
+  for (const row of rows) {
+    if (!row.sentAt) continue;
+    const key = row.sentAt.slice(0, 10);
+    const bucket = buckets.get(key);
+    if (!bucket) continue;
+    bucket.sent += row.sent;
+    bucket.delivered += row.delivered;
+    bucket.failed += row.failed;
+  }
+
+  return denseDaySeries(Array.from(buckets.values()));
+}
+
 export function DashboardScreen() {
-  const store = useDemoStore();
+  const store = useAppStore();
   const [importOpen, setImportOpen] = React.useState(false);
-  const ready = store.ready;
 
-  // All date-anchored work waits until the dataset is ready in the browser,
-  // which keeps prerendering deterministic (no `new Date()` during prerender).
-  const monthCampaigns = React.useMemo(() => (ready ? campaignsThisMonth(store.campaigns, new Date()) : []), [ready, store.campaigns]);
-  const monthSummary = React.useMemo(() => summarize(monthCampaigns), [monthCampaigns]);
+  /*
+   * All headline figures come from the reporting endpoints, which aggregate the
+   * persisted recipient records — the dashboard never estimates delivery from
+   * records it happens to hold.
+   */
+  const data = useAsync(async (signal) => {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const last30 = new Date(now.getTime() - 30 * DAY);
+    const prev30Start = new Date(now.getTime() - 60 * DAY);
 
-  const { last30, prev30 } = React.useMemo(() => {
-    if (!ready) return { last30: emptySummary(), prev30: emptySummary() };
-    const now = Date.now();
-    return {
-      last30: summarize(store.campaigns.filter((campaign) => campaign.sentAt !== null && now - new Date(campaign.sentAt).getTime() <= 30 * DAY)),
-      prev30: summarize(
-        store.campaigns.filter((campaign) => {
-          if (campaign.sentAt === null) return false;
-          const age = now - new Date(campaign.sentAt).getTime();
-          return age > 30 * DAY && age <= 60 * DAY;
-        }),
-      ),
-    };
-  }, [ready, store.campaigns]);
+    const [month, recent30, previous30, performance, upcoming] = await Promise.all([
+      reportOverview({ from: isoDay(monthStart), to: isoDay(now), signal }),
+      reportOverview({ from: isoDay(last30), to: isoDay(now), signal }),
+      reportOverview({ from: isoDay(prev30Start), to: isoDay(last30), signal }),
+      campaignPerformance({ from: isoDay(new Date(now.getTime() - 90 * DAY)), signal }),
+      listCampaigns({ limit: 5, sort: "sentAt", direction: "desc", signal }),
+    ]);
 
-  const recentCampaigns = React.useMemo(
-    () =>
-      ready
-        ? store.campaigns
-            .filter((campaign) => campaign.sentAt !== null)
-            .sort((a, b) => (a.sentAt! < b.sentAt! ? 1 : -1))
-            .slice(0, 5)
-        : [],
-    [ready, store.campaigns],
-  );
+    return { month, recent30, previous30, performance, recentCampaigns: upcoming.items };
+  }, []);
+
+  const loading = data.loading && !data.data;
+  const stats = store.outletStats ?? EMPTY_OUTLET_STATS;
+  const monthSummary: CampaignSummary = data.data
+    ? {
+        ...emptySummary(),
+        attempted: data.data.month.messages.attempted,
+        sent: data.data.month.messages.sent,
+        delivered: data.data.month.messages.delivered,
+        read: data.data.month.messages.read,
+        failed: data.data.month.messages.failed,
+        deliveryRate: data.data.month.deliveryRate,
+        readRate: data.data.month.readRate,
+        campaigns: data.data.month.campaigns.reported,
+      }
+    : emptySummary();
+
+  const deliveredDelta = data.data
+    ? percentDelta(data.data.recent30.messages.delivered, data.data.previous30.messages.delivered)
+    : null;
+  const rateDelta = data.data
+    ? data.data.recent30.deliveryRate - data.data.previous30.deliveryRate
+    : 0;
 
   const seriesForRange = React.useCallback(
-    (days: number): CampaignDaySeries[] => (store.ready ? denseDaySeries(computeDaySeries(store.campaigns, days)) : []),
-    [store.ready, store.campaigns],
+    (days: number): CampaignDaySeries[] =>
+      seriesFromRows(data.data?.performance ?? [], days),
+    [data.data],
   );
 
-  const stats = store.outletStats;
-  const deliveredDelta = percentDelta(last30.delivered, prev30.delivered);
-  const rateDelta = last30.deliveryRate - prev30.deliveryRate;
-  const monthName = React.useMemo(() => (ready ? new Intl.DateTimeFormat("en-GB", { month: "long" }).format(new Date()) : ""), [ready]);
+  const monthName = React.useMemo(
+    () => new Intl.DateTimeFormat("en-GB", { month: "long" }).format(new Date()),
+    [],
+  );
+
+  const recentCampaigns: Campaign[] = data.data?.recentCampaigns ?? [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -103,9 +160,15 @@ export function DashboardScreen() {
         }
         meta={
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="warning">Demo data — illustrative values only</Badge>
+            <Badge variant={store.health?.simulated ? "warning" : "success"}>
+              {store.health?.simulated
+                ? "WhatsApp provider simulated"
+                : store.health?.connected
+                  ? "WhatsApp connected"
+                  : "WhatsApp provider not connected"}
+            </Badge>
             <Badge variant="outline">{COMPANY.name}</Badge>
-            <Badge variant="outline">WhatsApp Business Platform not connected</Badge>
+            <Badge variant="outline">Figures aggregated by the API</Badge>
           </div>
         }
       />
@@ -113,21 +176,30 @@ export function DashboardScreen() {
       <section aria-label="Key performance indicators" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
         <KpiCard
           label="Total Outlets"
-          value={formatNumber(stats.total)}
+          value={formatNumber(stats.total ?? 0)}
           icon={Store}
-          hint={`Across ${stats.byProvince.filter((entry) => entry.count > 0).length} provinces`}
+          isLoading={!store.ready}
+          hint={`Across ${(stats.byProvince ?? []).filter((entry) => entry.count > 0).length} provinces`}
         />
         <KpiCard
           label="Eligible WhatsApp Contacts"
-          value={formatNumber(stats.eligible)}
+          value={formatNumber(stats.eligible ?? 0)}
           icon={BadgeCheck}
-          hint={`${formatPercent(stats.total > 0 ? stats.eligible / stats.total : 0)} of all outlets`}
+          isLoading={!store.ready}
+          hint={`${formatPercent(stats && stats.total > 0 ? stats.eligible / stats.total : 0)} of all outlets`}
         />
-        <KpiCard label="Campaigns This Month" value={formatNumber(monthCampaigns.length)} icon={Megaphone} hint={`${monthName} · all completed saves`} />
+        <KpiCard
+          label="Campaigns This Month"
+          value={formatNumber(monthSummary.campaigns)}
+          icon={Megaphone}
+          isLoading={loading}
+          hint={`${monthName} · reported by the API`}
+        />
         <KpiCard
           label="Messages Delivered"
           value={formatNumber(monthSummary.delivered)}
           icon={CheckCircle2}
+          isLoading={loading}
           trend={
             deliveredDelta === null
               ? undefined
@@ -142,8 +214,9 @@ export function DashboardScreen() {
           label="Delivery Rate"
           value={formatPercent(monthSummary.deliveryRate)}
           icon={Activity}
+          isLoading={loading}
           trend={
-            prev30.attempted === 0
+            !data.data || data.data.previous30.messages.attempted === 0
               ? undefined
               : {
                   value: `${rateDelta >= 0 ? "+" : ""}${(rateDelta * 100).toFixed(1)} pts`,
@@ -157,6 +230,7 @@ export function DashboardScreen() {
           value={formatNumber(monthSummary.failed)}
           icon={XCircle}
           emphasis="warning"
+          isLoading={loading}
           hint={`${formatPercent(
             monthSummary.attempted > 0 ? monthSummary.failed / monthSummary.attempted : 0,
           )} of ${formatNumber(monthSummary.attempted)} attempted`}
@@ -165,14 +239,14 @@ export function DashboardScreen() {
 
       <section className="grid min-w-0 gap-3 xl:grid-cols-3">
         <div className="min-w-0 xl:col-span-2">
-          <CampaignPerformanceChart seriesForRange={seriesForRange} isLoading={!store.ready} />
+          <CampaignPerformanceChart seriesForRange={seriesForRange} isLoading={loading} />
         </div>
         <div className="flex min-w-0 flex-col gap-3">
           <Card>
             <CardHeader>
               <div>
                 <CardTitle>Quick actions</CardTitle>
-                <CardDescription>Common demo workflows.</CardDescription>
+                <CardDescription>Common workflows.</CardDescription>
               </div>
             </CardHeader>
             <CardContent className="flex flex-col gap-2">
@@ -200,16 +274,16 @@ export function DashboardScreen() {
               </Button>
               <Separator className="my-1" />
               <p className="text-[11px] leading-4 text-muted-foreground">
-                Demo targets from the design brief: {formatNumber(DEMO_TOTALS.outlets)} outlets · {formatNumber(DEMO_TOTALS.eligibleContacts)} eligible contacts
-                · {formatNumber(DEMO_TOTALS.campaignsThisMonth)} campaigns this month.
+                {formatNumber(stats.total ?? 0)} outlets in the register ·{" "}
+                {formatNumber(stats.eligible ?? 0)} eligible contacts ·{" "}
+                {formatNumber(monthSummary.campaigns)} campaigns reported this month.
               </p>
             </CardContent>
           </Card>
-          {/* <RecentActivity events={store.activity} isLoading={!store.ready} /> */}
         </div>
       </section>
 
-      <RecentCampaignsTable campaigns={recentCampaigns} isLoading={!store.ready} />
+      <RecentCampaignsTable campaigns={recentCampaigns} isLoading={loading} />
 
       <OutletDistribution stats={stats} isLoading={!store.ready} />
 
@@ -220,16 +294,20 @@ export function DashboardScreen() {
         <Card className="min-w-0">
           <CardHeader>
             <div>
-              <CardTitle>Demo data source</CardTitle>
+              <CardTitle>Data source</CardTitle>
               <CardDescription>How these numbers are produced.</CardDescription>
             </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-2 text-[12px] leading-5 text-muted-foreground">
             <p>
-              Outlet, campaign and template records are generated deterministically in the browser from a fixed seed, then kept in this browser&apos;s local
-              storage while you use the prototype.
+              Outlets, segments, campaigns and templates are held by the Partner Club API. Every
+              figure on this page is aggregated by the server from those records.
             </p>
-            <p>Campaign metrics are simulated. Nothing is sent to WhatsApp, and no Meta Business account, database or API key is configured.</p>
+            <p>
+              Delivery metrics come from per-recipient records. When{" "}
+              <span className="font-medium text-foreground">simulated</span> is reported, the mock
+              provider is generating receipts and no WhatsApp messages are sent.
+            </p>
             <Button asChild variant="link" size="sm" className="h-auto justify-start px-0">
               <Link href="/settings">See integration status and next steps</Link>
             </Button>

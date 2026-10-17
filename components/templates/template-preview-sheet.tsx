@@ -98,15 +98,14 @@ export function TemplatePreviewSheet({
                   <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden="true" />
                 )}
                 <span>
-                  Locally approved in this prototype:{" "}
-                  {template.status === "Approved" ? "yes" : "no"} — campaign sends only allow
-                  locally approved templates.
+                  Approved for dispatch: {template.status === "Approved" ? "yes" : "no"} — the
+                  API refuses to send a campaign whose template is not approved.
                 </span>
               </li>
               <li className="flex items-start gap-2 text-muted-foreground">
                 <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-                WhatsApp Business Platform review: not connected. Templates created or edited here
-                are never automatically approved by Meta.
+                Approval status comes from the API. Submit a draft for approval, then refresh the
+                status to pick up a provider decision.
               </li>
               <li className="flex items-start gap-2 text-muted-foreground">
                 <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />

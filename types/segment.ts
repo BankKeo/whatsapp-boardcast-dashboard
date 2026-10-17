@@ -8,6 +8,11 @@ export interface Segment {
   description: string;
   filters: OutletFilters;
   createdBy: string;
+  /**
+   * Audience size at the time the segment was last saved or previewed,
+   * calculated by the API. `null` until the segment has been resolved.
+   */
+  matchCount: number | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -6,15 +6,19 @@ import { Download, Filter, RotateCcw, Send } from "lucide-react";
 import { toast } from "sonner";
 import { downloadFile, formatDate, formatNumber, formatPercent } from "@/lib/format";
 import { PROVINCES } from "@/lib/data/constants";
+import { denseDaySeries } from "@/lib/services/campaign-service";
 import {
-  computeDaySeries,
-  denseDaySeries,
-  metricsByGroup,
-  sentCampaigns,
-  summarize,
-} from "@/lib/services/campaign-service";
-import { useDemoStore } from "@/lib/store/demo-store";
+  campaignPerformance,
+  categoryPerformance,
+  exportReportCsv,
+  provincePerformance,
+  type CampaignPerformanceRow,
+} from "@/lib/api/reports";
+import { ApiError } from "@/lib/api/client";
+import { useAsync } from "@/lib/hooks/use-async";
+import { useAppStore } from "@/lib/store/app-store";
 import { OUTLET_CATEGORIES, type OutletCategory } from "@/types/outlet";
+import type { CampaignDaySeries, CampaignSummary } from "@/types/campaign";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,7 +42,6 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/layout/page-header";
 import { DateField } from "@/components/shared/date-field";
-import { DemoNotice } from "@/components/shared/demo-notice";
 import { EmptyState } from "@/components/shared/empty-state";
 import { LoadingState } from "@/components/shared/loading-state";
 import { CampaignStatusBadge } from "@/components/shared/status-badge";
@@ -47,76 +50,163 @@ import {
   GroupPerformanceChart,
   PerformanceOverTimeChart,
 } from "./report-charts";
-import { campaignReportRows, campaignRowsToCsv } from "@/lib/services/campaign-service";
+
+const DAY = 86_400_000;
+
+function isoDay(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+/** Sum per-day delivered/sent/failed from campaign performance rows. */
+function seriesFromRows(rows: CampaignPerformanceRow[], days: number): CampaignDaySeries[] {
+  const buckets = new Map<string, CampaignDaySeries>();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const date = new Date(today.getTime() - offset * DAY);
+    const key = isoDay(date);
+    buckets.set(key, {
+      date: key,
+      label: new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(date),
+      sent: 0,
+      delivered: 0,
+      failed: 0,
+    });
+  }
+
+  for (const row of rows) {
+    if (!row.sentAt) continue;
+    const bucket = buckets.get(row.sentAt.slice(0, 10));
+    if (!bucket) continue;
+    bucket.sent += row.sent;
+    bucket.delivered += row.delivered;
+    bucket.failed += row.failed;
+  }
+
+  return denseDaySeries(Array.from(buckets.values()));
+}
+
+function summarizeRows(rows: CampaignPerformanceRow[]): CampaignSummary {
+  const totals = rows.reduce(
+    (acc, row) => ({
+      attempted: acc.attempted + row.attempted,
+      sent: acc.sent + row.sent,
+      delivered: acc.delivered + row.delivered,
+      read: acc.read + row.read,
+      failed: acc.failed + row.failed,
+    }),
+    { attempted: 0, sent: 0, delivered: 0, read: 0, failed: 0 },
+  );
+  return {
+    ...totals,
+    deliveryRate: totals.attempted > 0 ? totals.delivered / totals.attempted : 0,
+    readRate: totals.delivered > 0 ? totals.read / totals.delivered : 0,
+    campaigns: rows.length,
+  };
+}
 
 export function ReportsScreen() {
-  const store = useDemoStore();
+  const store = useAppStore();
   const [campaignId, setCampaignId] = React.useState<string>("all");
   const [province, setProvince] = React.useState<string>("all");
   const [category, setCategory] = React.useState<OutletCategory | "all">("all");
   const [from, setFrom] = React.useState<string | null>(null);
   const [to, setTo] = React.useState<string | null>(null);
   const [period, setPeriod] = React.useState<string>("30");
+  const [exporting, setExporting] = React.useState(false);
 
-  // Deep link support: /reports#campaign=cmp-001
+  // Deep link support: /reports#campaign=<id>
   React.useEffect(() => {
-    if (!store.ready) return;
-    const match = window.location.hash.match(/^#campaign=(cmp-[\w-]+)$/i);
+    const match = window.location.hash.match(/^#campaign=([\w-]+)$/i);
     if (!match) return;
-    const campaign = store.campaigns.find((item) => item.id === match[1]);
-    if (campaign) setCampaignId(campaign.id);
+    setCampaignId(match[1]);
     window.history.replaceState(null, "", window.location.pathname);
-  }, [store.ready, store.campaigns]);
+  }, []);
 
-  const campaignsWithMetrics = React.useMemo(() => sentCampaigns(store.campaigns), [store.campaigns]);
+  const filters = React.useMemo(
+    () => ({
+      campaignId: campaignId === "all" ? null : campaignId,
+      province: province === "all" ? null : province,
+      category: category === "all" ? null : category,
+      from,
+      to,
+    }),
+    [campaignId, province, category, from, to],
+  );
 
-  const filteredCampaigns = React.useMemo(() => {
-    return campaignsWithMetrics.filter((campaign) => {
-      if (campaignId !== "all" && campaign.id !== campaignId) return false;
-      if (province !== "all" && !campaign.audience.provinces.includes(province)) return false;
-      if (category !== "all" && !campaign.audience.categories.includes(category)) return false;
-      const sentDate = campaign.sentAt!.slice(0, 10);
-      if (from && sentDate < from) return false;
-      if (to && sentDate > to) return false;
-      return true;
-    });
-  }, [campaignsWithMetrics, campaignId, province, category, from, to]);
+  /*
+   * Everything on this page is aggregated by the API from persisted recipient
+   * records: the campaign table, the province/category breakdowns and the
+   * export. The client only reshapes those rows for the charts.
+   */
+  const report = useAsync(async (signal) => {
+    const [rows, provinces, categories] = await Promise.all([
+      campaignPerformance({ ...filters, signal }),
+      provincePerformance({ ...filters, signal }),
+      categoryPerformance({ ...filters, signal }),
+    ]);
+    return { rows, provinces, categories };
+  }, [filters]);
 
-  const summary = React.useMemo(() => summarize(filteredCampaigns), [filteredCampaigns]);
-
+  const rows = React.useMemo(() => report.data?.rows ?? [], [report.data]);
+  const loading = report.loading && !report.data;
+  const summary = React.useMemo(() => summarizeRows(rows), [rows]);
   const series = React.useMemo(() => {
-    if (!store.ready) return [];
     const days = period === "all" ? 90 : Number(period);
-    return denseDaySeries(computeDaySeries(filteredCampaigns, days, new Date()));
-  }, [store.ready, filteredCampaigns, period]);
-
-  const byProvince = React.useMemo(
-    () => metricsByGroup(filteredCampaigns, store.outlets, "province"),
-    [filteredCampaigns, store.outlets],
-  );
-  const byCategory = React.useMemo(
-    () => metricsByGroup(filteredCampaigns, store.outlets, "category"),
-    [filteredCampaigns, store.outlets],
-  );
-
+    return seriesFromRows(rows, days);
+  }, [rows, period]);
   const comparison = React.useMemo(
     () =>
-      [...filteredCampaigns]
-        .sort((a, b) => b.metrics.delivered - a.metrics.delivered)
+      [...rows]
+        .sort((a, b) => b.delivered - a.delivered)
         .slice(0, 8)
-        .map((campaign) => ({
-          name: campaign.name.length > 22 ? `${campaign.name.slice(0, 21)}…` : campaign.name,
-          delivered: campaign.metrics.delivered,
-          failed: campaign.metrics.failed,
+        .map((row) => ({
+          name: row.name.length > 22 ? `${row.name.slice(0, 21)}…` : row.name,
+          delivered: row.delivered,
+          failed: row.failed,
         })),
-    [filteredCampaigns],
+    [rows],
   );
+  const readAvailable = rows.some((row) => row.read > 0);
+  const selectedCampaign = campaignId === "all" ? null : rows.find((row) => row.campaignId === campaignId) ?? null;
 
-  const readAvailable = filteredCampaigns.some((campaign) => campaign.metrics.read !== null);
-  const selectedCampaign =
-    campaignId !== "all" ? store.campaigns.find((item) => item.id === campaignId) ?? null : null;
+  const hasFilters =
+    campaignId !== "all" || province !== "all" || category !== "all" || from !== null || to !== null;
 
-  if (!store.ready) {
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const csv = await exportReportCsv(filters);
+      downloadFile("partner-club-campaign-report.csv", csv, "text/csv");
+      toast.success("Report exported", {
+        description: `${formatNumber(rows.length)} campaigns included.`,
+      });
+    } catch (cause) {
+      toast.error(cause instanceof ApiError ? cause.message : "The export failed.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  if (report.error && !report.data) {
+    return (
+      <div className="flex flex-col gap-4">
+        <PageHeader
+          title="Campaign Reports"
+          description="Delivery performance across Partner Club WhatsApp campaigns."
+        />
+        <Card className="flex flex-col items-center gap-2 px-4 py-8 text-center">
+          <p className="text-[13px] font-medium text-destructive">{report.error}</p>
+          <Button variant="outline" size="sm" onClick={report.reload}>
+            Try again
+          </Button>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!report.data) {
     return (
       <div className="flex flex-col gap-4">
         <PageHeader
@@ -128,54 +218,36 @@ export function ReportsScreen() {
     );
   }
 
-  const hasFilters =
-    campaignId !== "all" || province !== "all" || category !== "all" || from !== null || to !== null;
-
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Campaign Reports"
-        description="Delivery performance by campaign, province and outlet category. Metrics are simulated demo values."
+        description="Delivery performance by campaign, province and outlet category, aggregated by the API from per-recipient records."
         headerAction={
           <Button
             variant="outline"
             size="sm"
-            disabled={filteredCampaigns.length === 0}
-            onClick={() => {
-              downloadFile(
-                "partner-club-campaign-report.csv",
-                campaignRowsToCsv(
-                  campaignReportRows(
-                    filteredCampaigns.map((campaign) => campaign),
-                  ),
-                ),
-                "text/csv",
-              );
-              toast.success("Report exported", {
-                description: `${formatNumber(filteredCampaigns.length)} campaigns included.`,
-              });
-            }}
+            disabled={exporting || rows.length === 0}
+            onClick={() => void handleExport()}
           >
             <Download aria-hidden="true" />
-            Export report CSV
+            {exporting ? "Exporting…" : "Export report CSV"}
           </Button>
         }
         meta={
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="warning">Simulated metrics</Badge>
+            <Badge variant={store.health?.simulated ? "warning" : "success"}>
+              {store.health?.simulated ? "Simulated delivery" : "Provider connected"}
+            </Badge>
             {selectedCampaign ? (
               <Badge variant="outline" className="gap-1">
                 Campaign: {selectedCampaign.name}
               </Badge>
             ) : null}
-            <Badge variant="outline">
-              {formatNumber(filteredCampaigns.length)} campaigns in scope
-            </Badge>
+            <Badge variant="outline">{formatNumber(rows.length)} campaigns in scope</Badge>
           </div>
         }
       />
-
-      <DemoNotice />
 
       <Card className="px-3 py-3">
         <div className="flex flex-wrap items-end gap-2">
@@ -189,9 +261,9 @@ export function ReportsScreen() {
               </SelectTrigger>
               <SelectContent className="max-w-[min(34rem,90vw)]">
                 <SelectItem value="all">All campaigns</SelectItem>
-                {campaignsWithMetrics.map((campaign) => (
-                  <SelectItem key={campaign.id} value={campaign.id}>
-                    {campaign.name}
+                {rows.map((row) => (
+                  <SelectItem key={row.campaignId} value={row.campaignId}>
+                    {row.name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -330,27 +402,24 @@ export function ReportsScreen() {
             <div>
               <CardTitle>Performance by province</CardTitle>
               <CardDescription>
-                Apportioned from audience composition (values rounded) — WhatsApp reports delivery at
-                campaign level, so the group totals may differ slightly from the campaign summary.
+                Delivery joined to each recipient&apos;s outlet, so these totals reconcile with the
+                campaign summary.
               </CardDescription>
             </div>
           </CardHeader>
           <CardContent>
-            <GroupPerformanceChart data={byProvince} />
+            <GroupPerformanceChart data={report.data.provinces} />
           </CardContent>
         </Card>
         <Card className="min-w-0">
           <CardHeader>
             <div>
               <CardTitle>Performance by outlet category</CardTitle>
-              <CardDescription>
-                Delivered and failed messages per category, apportioned from audience composition
-                and rounded.
-              </CardDescription>
+              <CardDescription>Delivered and failed messages per category.</CardDescription>
             </div>
           </CardHeader>
           <CardContent>
-            <GroupPerformanceChart data={byCategory} maxRows={3} />
+            <GroupPerformanceChart data={report.data.categories} maxRows={3} />
           </CardContent>
         </Card>
       </div>
@@ -366,11 +435,15 @@ export function ReportsScreen() {
           </div>
           <Badge variant="outline" className="shrink-0 gap-1">
             <Filter aria-hidden="true" />
-            {formatNumber(filteredCampaigns.length)} rows
+            {formatNumber(rows.length)} rows
           </Badge>
         </CardHeader>
         <CardContent className="px-0 pb-0">
-          {filteredCampaigns.length === 0 ? (
+          {rows.length === 0 && loading ? (
+            <div className="px-4 py-6">
+              <LoadingState label="Loading results…" />
+            </div>
+          ) : rows.length === 0 ? (
             <EmptyState
               icon={<Send aria-hidden="true" />}
               title="No sent campaigns match these filters"
@@ -393,43 +466,39 @@ export function ReportsScreen() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredCampaigns.map((campaign) => (
-                    <TableRow key={campaign.id}>
+                  {rows.map((row) => (
+                    <TableRow key={row.campaignId}>
                       <TableCell className="max-w-[18rem] pl-4">
                         <Link
-                          href={`/campaigns/${campaign.id}`}
+                          href={`/campaigns/${row.campaignId}`}
                           className="line-clamp-1 font-medium hover:text-primary hover:underline"
                         >
-                          {campaign.name}
+                          {row.name}
                         </Link>
                       </TableCell>
                       <TableCell>
-                        <CampaignStatusBadge status={campaign.status} />
+                        <CampaignStatusBadge status={row.status} />
                       </TableCell>
                       <TableCell className="hidden whitespace-nowrap tabular-nums text-muted-foreground md:table-cell">
-                        {formatDate(campaign.sentAt)}
+                        {row.sentAt ? formatDate(row.sentAt) : "—"}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {formatNumber(campaign.metrics.attempted)}
+                        {formatNumber(row.attempted)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {formatNumber(campaign.metrics.sent)}
+                        {formatNumber(row.sent)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {formatNumber(campaign.metrics.delivered)}
+                        {formatNumber(row.delivered)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {campaign.metrics.read === null ? "—" : formatNumber(campaign.metrics.read)}
+                        {row.read === 0 ? "—" : formatNumber(row.read)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {formatNumber(campaign.metrics.failed)}
+                        {formatNumber(row.failed)}
                       </TableCell>
                       <TableCell className="pr-4 text-right tabular-nums">
-                        {formatPercent(
-                          campaign.metrics.attempted > 0
-                            ? campaign.metrics.delivered / campaign.metrics.attempted
-                            : 0,
-                        )}
+                        {formatPercent(row.deliveryRate)}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -469,7 +538,7 @@ export function ReportsScreen() {
         <CardHeader>
           <div>
             <CardTitle>How to read these numbers</CardTitle>
-            <CardDescription>Definitions used across the prototype.</CardDescription>
+            <CardDescription>Definitions used across the dashboard.</CardDescription>
           </div>
         </CardHeader>
         <CardContent className="grid gap-2 text-[12px] leading-5 text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">

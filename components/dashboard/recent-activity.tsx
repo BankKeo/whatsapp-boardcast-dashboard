@@ -4,9 +4,12 @@ import * as React from "react";
 import {
   FileText,
   FlaskConical,
+  LogIn,
   Megaphone,
   Plug,
+  Settings,
   Store,
+  Upload,
   UserPlus,
   Users,
 } from "lucide-react";
@@ -22,6 +25,9 @@ const ICONS: Record<ActivityType, React.ComponentType<{ className?: string }>> =
   template: FileText,
   team: UserPlus,
   integration: Plug,
+  auth: LogIn,
+  settings: Settings,
+  import: Upload,
 };
 
 export function RecentActivity({
@@ -36,7 +42,7 @@ export function RecentActivity({
       <CardHeader>
         <div>
           <CardTitle>Recent activity</CardTitle>
-          <CardDescription>Audit trail of demo actions in this browser.</CardDescription>
+          <CardDescription>Audit trail recorded by the API.</CardDescription>
         </div>
       </CardHeader>
       <CardContent className="px-0">

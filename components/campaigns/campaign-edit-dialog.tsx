@@ -4,9 +4,11 @@ import * as React from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
-import { CURRENT_USER, CAMPAIGN_OWNERS } from "@/lib/data/constants";
+import { useCampaignOwners } from "@/lib/hooks/use-campaign-owners";
+import { useSession } from "@/lib/auth/session";
+import { ApiError } from "@/lib/api/client";
 import { campaignDetailsSchema, type CampaignDetailsValues } from "@/lib/schemas/campaign";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { useAppStore } from "@/lib/store/app-store";
 import type { Campaign } from "@/types/campaign";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,14 +47,16 @@ export function CampaignEditDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const store = useDemoStore();
+  const store = useAppStore();
+  const { user } = useSession();
+  const owners = useCampaignOwners();
   const form = useForm<CampaignDetailsValues>({
     resolver: zodResolver(campaignDetailsSchema),
     defaultValues: {
       name: campaign?.name ?? "",
       objective: campaign?.objective ?? "Seasonal promotion",
       description: campaign?.description ?? "",
-      owner: campaign?.owner ?? CURRENT_USER.name,
+      owner: campaign?.owner ?? user?.name ?? "",
     },
     mode: "onBlur",
   });
@@ -82,16 +86,31 @@ export function CampaignEditDialog({
         </DialogHeader>
         <Form {...form}>
           <form
-            onSubmit={form.handleSubmit((values) => {
-              store.updateCampaign(campaign.id, {
-                name: values.name.trim(),
-                objective: values.objective,
-                description: values.description.trim(),
-                owner: values.owner.trim(),
-              });
-              store.logActivity("campaign", `Campaign “${values.name}” details were updated.`);
-              toast.success("Campaign updated", { description: values.name });
-              onOpenChange(false);
+            onSubmit={form.handleSubmit(async (values) => {
+              try {
+                await store.updateCampaign(campaign.id, {
+                  details: {
+                    name: values.name.trim(),
+                    objective: values.objective,
+                    description: values.description.trim(),
+                    owner: values.owner.trim(),
+                  },
+                });
+                toast.success("Campaign updated", { description: values.name });
+                onOpenChange(false);
+              } catch (cause) {
+                if (cause instanceof ApiError) {
+                  for (const [field, message] of Object.entries(cause.fieldErrors)) {
+                    form.setError(field as keyof CampaignDetailsValues, {
+                      type: "server",
+                      message,
+                    });
+                  }
+                }
+                toast.error(
+                  cause instanceof ApiError ? cause.message : "The campaign could not be updated.",
+                );
+              }
             })}
             className="grid gap-3 sm:grid-cols-2"
             noValidate
@@ -154,13 +173,11 @@ export function CampaignEditDialog({
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {[CURRENT_USER.name, ...CAMPAIGN_OWNERS]
-                        .filter((name, index, all) => all.indexOf(name) === index)
-                        .map((name) => (
-                          <SelectItem key={name} value={name}>
-                            {name}
-                          </SelectItem>
-                        ))}
+                      {owners.map((name) => (
+                        <SelectItem key={name} value={name}>
+                          {name}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                   <FormMessage />

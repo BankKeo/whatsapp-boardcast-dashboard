@@ -8,7 +8,9 @@ import { toast } from "sonner";
 import { formatDate, formatRelative, initialsOf } from "@/lib/format";
 import { teamMemberFormSchema, type TeamMemberFormValues } from "@/lib/schemas/team";
 import { filterTeamMembers } from "@/lib/services/team-service";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { useAppStore } from "@/lib/store/app-store";
+import { ApiError } from "@/lib/api/client";
+import { useSession } from "@/lib/auth/session";
 import {
   ROLE_CAPABILITIES,
   TEAM_MEMBER_STATUSES,
@@ -59,11 +61,14 @@ import {
 import { PageHeader } from "@/components/layout/page-header";
 import { DataTable, type DataTableColumn } from "@/components/shared/data-table";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+import { EmptyState } from "@/components/shared/empty-state";
 import { LoadingState } from "@/components/shared/loading-state";
 import { TeamStatusBadge } from "@/components/shared/status-badge";
 
 export function TeamScreen() {
-  const store = useDemoStore();
+  const store = useAppStore();
+  const { hasRole } = useSession();
+  const isAdministrator = hasRole("Administrator");
   const [search, setSearch] = React.useState("");
   const [role, setRole] = React.useState<TeamRole | "all">("all");
   const [status, setStatus] = React.useState<TeamMemberStatus | "all">("all");
@@ -122,7 +127,7 @@ export function TeamScreen() {
         hideBelow: "xl",
         render: (member) => (
           <span className="whitespace-nowrap tabular-nums text-muted-foreground">
-            {formatDate(member.invitedAt)}
+            {member.invitedAt ? formatDate(member.invitedAt) : "—"}
           </span>
         ),
       },
@@ -148,10 +153,18 @@ export function TeamScreen() {
                   key={roleOption}
                   disabled={member.role === roleOption}
                   onSelect={() => {
-                    store.updateTeamMember(member.id, { role: roleOption });
-                    toast.success("Role updated", {
-                      description: `${member.name} is now a ${roleOption}.`,
-                    });
+                    void store
+                      .updateTeamMemberRole(member.id, roleOption)
+                      .then(() =>
+                        toast.success("Role updated", {
+                          description: `${member.name} is now a ${roleOption}.`,
+                        }),
+                      )
+                      .catch((cause: unknown) =>
+                        toast.error(
+                          cause instanceof ApiError ? cause.message : "The role could not be changed.",
+                        ),
+                      );
                   }}
                 >
                   {roleOption}
@@ -161,8 +174,18 @@ export function TeamScreen() {
               {member.status === "Deactivated" ? (
                 <DropdownMenuItem
                   onSelect={() => {
-                    store.updateTeamMember(member.id, { status: "Active" });
-                    toast.success("Member reactivated", { description: member.name });
+                    void store
+                      .updateTeamMemberStatus(member.id, "Active")
+                      .then(() =>
+                        toast.success("Member reactivated", { description: member.name }),
+                      )
+                      .catch((cause: unknown) =>
+                        toast.error(
+                          cause instanceof ApiError
+                            ? cause.message
+                            : "The member could not be reactivated.",
+                        ),
+                      );
                   }}
                 >
                   Reactivate member
@@ -179,6 +202,24 @@ export function TeamScreen() {
     ],
     [store],
   );
+
+  if (!isAdministrator) {
+    return (
+      <div className="flex flex-col gap-4">
+        <PageHeader
+          title="Team & Permissions"
+          description="Manage who can build campaigns, approve them and view reports."
+        />
+        <Card>
+          <EmptyState
+            icon={<ShieldCheck aria-hidden="true" />}
+            title="Administrators only"
+            description="Your role does not include team administration. Ask an Administrator to change your role if you need access."
+          />
+        </Card>
+      </div>
+    );
+  }
 
   if (!store.ready) {
     return (
@@ -199,7 +240,7 @@ export function TeamScreen() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Team & Permissions"
-        description="Role-based access is simulated in the prototype: roles change what the interface offers, but no backend enforcement exists yet."
+        description="Invite colleagues and assign roles. Role changes take effect on the API immediately."
         headerAction={
           <Button size="sm" onClick={() => setInviteOpen(true)}>
             <UserPlus aria-hidden="true" />
@@ -291,8 +332,8 @@ export function TeamScreen() {
               Role capabilities
             </CardTitle>
             <CardDescription>
-              What each role can do in the prototype interface. Real authorisation depends on the
-              backend chosen in Phase 3.
+              What each role can do. The API enforces these permissions on every request, so
+              unavailable actions are refused rather than merely hidden.
             </CardDescription>
           </div>
         </CardHeader>
@@ -371,17 +412,26 @@ export function TeamScreen() {
         title="Deactivate this team member?"
         description={
           <>
-            {deactivateTarget?.name} will keep their history but lose access to the interface. This
-            is a UI-level change in the prototype — no identity provider is connected.
+            {deactivateTarget?.name} will keep their history but lose access. They will no longer be
+            able to sign in or act in the dashboard.
           </>
         }
         confirmLabel="Deactivate member"
         destructive
         onConfirm={() => {
           if (!deactivateTarget) return;
-          store.updateTeamMember(deactivateTarget.id, { status: "Deactivated" });
-          toast.success("Member deactivated", { description: deactivateTarget.name });
+          const target = deactivateTarget;
           setDeactivateTarget(null);
+          void store
+            .updateTeamMemberStatus(target.id, "Deactivated")
+            .then(() => toast.success("Member deactivated", { description: target.name }))
+            .catch((cause: unknown) =>
+              toast.error(
+                cause instanceof ApiError
+                  ? cause.message
+                  : "The member could not be deactivated.",
+              ),
+            );
         }}
       />
     </div>
@@ -395,7 +445,7 @@ function InviteMemberDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const store = useDemoStore();
+  const store = useAppStore();
   const form = useForm<TeamMemberFormValues>({
     resolver: zodResolver(teamMemberFormSchema),
     defaultValues: { name: "", email: "", role: "Campaign Creator" },
@@ -414,18 +464,29 @@ function InviteMemberDialog({
         <DialogHeader>
           <DialogTitle>Invite team member</DialogTitle>
           <DialogDescription>
-            Invitations are simulated. No email is sent and no account is created — the member is
-            added to this browser with the Invited status.
+            The account is created with the Invited status. The member sets their own password before
+            they can sign in.
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
           <form
-            onSubmit={form.handleSubmit((values) => {
-              store.inviteTeamMember(values);
-              toast.success("Invitation recorded", {
-                description: `${values.name} was added as ${values.role} (pending).`,
-              });
-              onOpenChange(false);
+            onSubmit={form.handleSubmit(async (values) => {
+              try {
+                const member = await store.inviteTeamMember(values);
+                toast.success("Invitation recorded", {
+                  description: `${member.name} was added as ${member.role} (pending).`,
+                });
+                onOpenChange(false);
+              } catch (cause) {
+                if (cause instanceof ApiError) {
+                  for (const [field, message] of Object.entries(cause.fieldErrors)) {
+                    form.setError(field as keyof TeamMemberFormValues, { type: "server", message });
+                  }
+                }
+                toast.error(
+                  cause instanceof ApiError ? cause.message : "The invitation could not be created.",
+                );
+              }
             })}
             className="flex flex-col gap-3"
             noValidate
@@ -510,7 +571,7 @@ function EditRoleDialog({
   member: TeamMember | null;
   onOpenChange: (open: boolean) => void;
 }) {
-  const store = useDemoStore();
+  const store = useAppStore();
   if (!member) return null;
   return (
     <Dialog open={member !== null} onOpenChange={onOpenChange}>
@@ -518,8 +579,8 @@ function EditRoleDialog({
         <DialogHeader>
           <DialogTitle>Edit role — {member.name}</DialogTitle>
           <DialogDescription>
-            Roles change which areas of the prototype interface are offered. Choose the closest
-            match to the person&apos;s responsibilities.
+            Roles decide what this person can do: building campaigns, approving them, managing
+            outlets and viewing reports.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-2">
@@ -529,11 +590,19 @@ function EditRoleDialog({
               variant={member.role === roleOption ? "secondary" : "outline"}
               className="justify-start"
               onClick={() => {
-                store.updateTeamMember(member.id, { role: roleOption });
-                toast.success("Role updated", {
-                  description: `${member.name} is now a ${roleOption}.`,
-                });
-                onOpenChange(false);
+                void store
+                  .updateTeamMemberRole(member.id, roleOption)
+                  .then(() => {
+                    toast.success("Role updated", {
+                      description: `${member.name} is now a ${roleOption}.`,
+                    });
+                    onOpenChange(false);
+                  })
+                  .catch((cause: unknown) =>
+                    toast.error(
+                      cause instanceof ApiError ? cause.message : "The role could not be changed.",
+                    ),
+                  );
               }}
             >
               <span className="flex flex-col items-start text-left">

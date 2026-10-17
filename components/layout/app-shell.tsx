@@ -14,11 +14,13 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { useAppStore } from "@/lib/store/app-store";
 
 const SIDEBAR_KEY = "partner-club-sidebar";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const { health } = useAppStore();
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [searchOpen, setSearchOpen] = React.useState(false);
@@ -94,7 +96,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <span className="font-medium text-foreground">Partner Club</span>
                 <span>Lao Brewery Co., Ltd. — Carlsberg Group</span>
                 <Separator orientation="vertical" className="hidden h-3 sm:block" />
-                <span>Prototype build · sample data only · no WhatsApp Business connection</span>
+                <span>Partner Club dashboard · API-backed</span>
+                <span>Lao Brewery Co., Ltd. — Carlsberg Group</span>
+                <Separator orientation="vertical" className="hidden h-3 sm:block" />
+                <span>
+                  {health?.simulated
+                    ? "WhatsApp provider: simulated · no messages are delivered"
+                    : health?.connected
+                      ? "WhatsApp provider: connected"
+                      : "WhatsApp provider: not connected"}
+                </span>
                 <Button
                   type="button"
                   variant="link"
@@ -119,7 +130,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="mt-auto">
               <div className="flex items-center gap-2 px-3 pb-1 text-[11px] text-muted-foreground">
                 <Menu className="size-3.5" aria-hidden="true" />
-                Prototype navigation
+                Navigation
               </div>
               <SidebarFooter collapsed={false} onToggle={() => setMobileOpen(false)} />
             </div>

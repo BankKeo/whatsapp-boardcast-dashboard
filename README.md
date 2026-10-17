@@ -1,16 +1,19 @@
 # Partner Club WhatsApp Marketing System — Admin Dashboard
 
-Enterprise admin dashboard prototype for the **Partner Club** WhatsApp marketing
+Enterprise admin dashboard for the **Partner Club** WhatsApp marketing
 programme at Lao Brewery Co., Ltd. (Carlsberg Group).
 
 Marketing staff manage outlet contacts, segment outlets by province and
 category, compose targeted WhatsApp campaigns and monitor campaign performance —
 all from one data-dense workspace.
 
-> **This is a front-end prototype.** Every outlet, campaign, template and metric
-> is generated sample data held in the browser. The WhatsApp Business Platform is
-> **not** connected and no message is ever sent. See
-> [`docs/phase-3-integration.md`](./docs/phase-3-integration.md).
+> **API-backed.** Outlets, audiences, campaigns, templates, team members and
+> reports all come from the Partner Club API
+> (`whatsapp-boardcast-backend`) — there is no generated sample data in this
+> repository. Whether messages actually go out depends on the provider the API is
+> configured with: with no WhatsApp credentials the API reports
+> `simulated: true`, and the dashboard labels every send accordingly. See
+> [`docs/environment-and-deployment.md`](./docs/environment-and-deployment.md).
 
 ## Stack
 
@@ -21,16 +24,26 @@ all from one data-dense workspace.
 | Styling | Tailwind CSS v4 (`@tailwindcss/turbopack`) |
 | UI primitives | shadcn/ui-style components on Radix UI |
 | Forms | React Hook Form + Zod (`zodResolver`) |
+| Data | Partner Club REST API (`lib/api/*`, `fetch` + `AbortController`) |
+| Auth | Bearer access token in memory + HTTP-only refresh cookie |
 | Icons | Lucide React |
 | Charts | Recharts |
 | Toasts | Sonner |
 
 ## Getting started
 
+The dashboard needs the API running first — see the backend README for
+`npm run seed` and `npm run dev`.
+
 ```bash
 pnpm install
-pnpm dev          # http://localhost:3000
+cp .env.example .env.local   # point NEXT_PUBLIC_API_URL at the API
+pnpm dev                     # http://localhost:3000
 ```
+
+Sign in with the seeded administrator (`admin@partnerclub.local` /
+`ChangeMe-Admin-2026` by default). See [`docs/environment-and-deployment.md`](./docs/environment-and-deployment.md)
+for how requests are authenticated and why CORS must allow this origin.
 
 Other scripts:
 
@@ -40,6 +53,35 @@ pnpm start        # serve the production build
 pnpm lint         # eslint
 pnpm exec tsc --noEmit   # standalone type check
 ```
+
+## How the dashboard talks to the API
+
+```text
+app/(dashboard)/page.tsx        guarded layout (redirects to /login)
+        │
+        ├── lib/auth/session.tsx      login / logout, refresh, role helpers
+        ├── lib/store/app-store.tsx   bounded collections + write actions
+        │        └── lib/api/*        typed endpoint functions
+        │                 └── lib/api/client.ts   envelope, errors, 401 retry
+        └── lib/hooks/*               per-screen queries (useAsync)
+```
+
+- **Authentication.** `POST /auth/login` returns a short-lived access token in
+  the body plus an HTTP-only refresh cookie. The token is held in memory only;
+  on a cold load the provider restores the session with `POST /auth/refresh`. A
+  `401` from any request triggers one silent refresh and retry.
+- **Pagination.** The outlet register is large, so `/outlets` and `/campaigns`
+  are filtered, sorted and paged **by the server**; the browser never loads the
+  whole table.
+- **Aggregates.** Dashboard KPIs, the delivery chart and every report come from
+  `/reports/*` and `/outlets/stats`, which aggregate persisted records — the UI
+  does not estimate delivery from records it happens to hold.
+- **Consent and eligibility.** The API derives and stores `whatsappEligibility`,
+  `consentStatus` and `dataQualityStatus`. The UI renders those fields instead of
+  recomputing them, so a contact cannot look eligible here and be skipped at
+  dispatch.
+- **Errors.** `ApiError` carries the API's `code`, `status` and field-level
+  `details`, which forms attach to the relevant input via `setError`.
 
 ## Screens
 

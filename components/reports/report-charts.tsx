@@ -16,7 +16,7 @@ import {
 } from "recharts";
 import { formatCompact, formatNumber } from "@/lib/format";
 import type { CampaignDaySeries } from "@/types/campaign";
-import type { GroupPerformance } from "@/lib/services/campaign-service";
+import type { GroupPerformanceRow as GroupPerformance } from "@/lib/api/reports";
 
 const CHART_COLORS = [
   "var(--chart-1)",

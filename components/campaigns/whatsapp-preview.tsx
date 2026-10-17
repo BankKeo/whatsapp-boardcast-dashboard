@@ -70,15 +70,15 @@ export function WhatsAppPreview({
         </div>
 
         <p className="self-end text-[10px] text-[#667781]">
-          Simulated WhatsApp Business message
+          WhatsApp message preview
         </p>
       </div>
 
       <div className="flex items-start gap-2 border-t border-[#d8d0c6] bg-white/70 px-3 py-2 text-[10px] leading-4 text-[#5b564d]">
         <Info className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
         <p>
-          Preview only. Variables are filled with sample values from the demo outlet dataset; the
-          WhatsApp Business Platform is not connected and no message is delivered.
+          Preview only. Variables are filled from a real matching contact; this is not a
+          delivered message and the layout may differ on a device.
         </p>
       </div>
     </div>

@@ -11,7 +11,11 @@ import {
   Store,
   Users,
 } from "lucide-react";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { listOutlets } from "@/lib/api/outlets";
+import { listSegments } from "@/lib/api/segments";
+import { listCampaigns } from "@/lib/api/campaigns";
+import { listTemplates } from "@/lib/api/templates";
+import { useAsync } from "@/lib/hooks/use-async";
 import {
   CommandDialog,
   CommandEmpty,
@@ -23,6 +27,22 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { CampaignStatusBadge } from "@/components/shared/status-badge";
+import type { Outlet, OutletFilters } from "@/types/outlet";
+import type { Segment } from "@/types/segment";
+import type { Campaign } from "@/types/campaign";
+import type { MessageTemplate } from "@/types/template";
+
+/** Search only needs the free-text term; the rest stay at their defaults. */
+const EMPTY_FILTERS: OutletFilters = {
+  search: "",
+  provinces: [],
+  districts: [],
+  categories: [],
+  eligibility: "any",
+  consent: "any",
+  phoneStatus: "any",
+  dataQuality: "any",
+};
 
 const PAGES = [
   { label: "Dashboard", href: "/", icon: "dashboard" },
@@ -46,6 +66,26 @@ const PAGE_ICON = {
   settings: Settings,
 } as const;
 
+interface SearchResults {
+  outlets: Outlet[];
+  campaigns: Campaign[];
+  segments: Segment[];
+  templates: MessageTemplate[];
+}
+
+const EMPTY_RESULTS: SearchResults = { outlets: [], campaigns: [], segments: [], templates: [] };
+
+/** Wait long enough to coalesce keystrokes, then search the API. */
+function debounce(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    });
+  });
+}
+
 export function GlobalSearch({
   open,
   onOpenChange,
@@ -54,8 +94,30 @@ export function GlobalSearch({
   onOpenChange: (open: boolean) => void;
 }) {
   const router = useRouter();
-  const store = useDemoStore();
   const [query, setQuery] = React.useState("");
+  const needle = query.trim();
+
+  const { data } = useAsync<SearchResults>(async (signal) => {
+    if (needle.length < 2) return EMPTY_RESULTS;
+    await debounce(200, signal);
+
+    const [outlets, campaigns, segments, templates] = await Promise.all([
+      listOutlets({ filters: { ...EMPTY_FILTERS, search: needle }, limit: 6, signal }),
+      listCampaigns({ search: needle, limit: 5, signal }),
+      listSegments({ search: needle, limit: 4, signal }),
+      listTemplates({ search: needle, limit: 4, signal }),
+    ]);
+
+    if (signal.aborted) return EMPTY_RESULTS;
+    return {
+      outlets: outlets.items,
+      campaigns: campaigns.items,
+      segments: segments.items,
+      templates: templates.items,
+    };
+  }, [needle]);
+
+  const results = data ?? EMPTY_RESULTS;
 
   const go = React.useCallback(
     (href: string) => {
@@ -66,38 +128,11 @@ export function GlobalSearch({
     [onOpenChange, router],
   );
 
-  const needle = query.trim().toLowerCase();
-
-  const outletMatches = React.useMemo(() => {
-    if (needle.length < 2) return [];
-    return store.outlets
-      .filter(
-        (outlet) =>
-          outlet.name.toLowerCase().includes(needle) ||
-          outlet.ownerName.toLowerCase().includes(needle) ||
-          outlet.phone.includes(query.trim()),
-      )
-      .slice(0, 6);
-  }, [store.outlets, needle, query]);
-
-  const segmentMatches = React.useMemo(() => {
-    if (needle.length < 2) return [];
-    return store.segments.filter((segment) => segment.name.toLowerCase().includes(needle)).slice(0, 4);
-  }, [store.segments, needle]);
-
-  const campaignMatches = React.useMemo(() => {
-    if (needle.length < 2) return [];
-    return store.campaigns
-      .filter((campaign) => campaign.name.toLowerCase().includes(needle))
-      .slice(0, 5);
-  }, [store.campaigns, needle]);
-
-  const templateMatches = React.useMemo(() => {
-    if (needle.length < 2) return [];
-    return store.templates
-      .filter((template) => template.name.toLowerCase().includes(needle))
-      .slice(0, 4);
-  }, [store.templates, needle]);
+  const total =
+    results.outlets.length +
+    results.campaigns.length +
+    results.segments.length +
+    results.templates.length;
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange} shouldFilter={false}>
@@ -109,13 +144,13 @@ export function GlobalSearch({
       <CommandList>
         <CommandEmpty>
           {needle.length < 2
-            ? "Type at least two characters to search the demo dataset."
-            : "No matches in the demo dataset."}
+            ? "Type at least two characters to search."
+            : "No matching records."}
         </CommandEmpty>
 
-        {outletMatches.length > 0 ? (
+        {results.outlets.length > 0 ? (
           <CommandGroup heading="Outlets">
-            {outletMatches.map((outlet) => (
+            {results.outlets.map((outlet) => (
               <CommandItem
                 key={outlet.id}
                 value={`outlet-${outlet.id}`}
@@ -131,9 +166,9 @@ export function GlobalSearch({
           </CommandGroup>
         ) : null}
 
-        {campaignMatches.length > 0 ? (
+        {results.campaigns.length > 0 ? (
           <CommandGroup heading="Campaigns">
-            {campaignMatches.map((campaign) => (
+            {results.campaigns.map((campaign) => (
               <CommandItem
                 key={campaign.id}
                 value={`campaign-${campaign.id}`}
@@ -149,9 +184,9 @@ export function GlobalSearch({
           </CommandGroup>
         ) : null}
 
-        {segmentMatches.length > 0 ? (
+        {results.segments.length > 0 ? (
           <CommandGroup heading="Audience segments">
-            {segmentMatches.map((segment) => (
+            {results.segments.map((segment) => (
               <CommandItem
                 key={segment.id}
                 value={`segment-${segment.id}`}
@@ -164,9 +199,9 @@ export function GlobalSearch({
           </CommandGroup>
         ) : null}
 
-        {templateMatches.length > 0 ? (
+        {results.templates.length > 0 ? (
           <CommandGroup heading="Message templates">
-            {templateMatches.map((template) => (
+            {results.templates.map((template) => (
               <CommandItem
                 key={template.id}
                 value={`template-${template.id}`}
@@ -179,8 +214,7 @@ export function GlobalSearch({
           </CommandGroup>
         ) : null}
 
-        {outletMatches.length + campaignMatches.length + segmentMatches.length + templateMatches.length ===
-        0 ? (
+        {total === 0 ? (
           <>
             <CommandSeparator />
             <CommandGroup heading="Pages">
@@ -202,11 +236,11 @@ export function GlobalSearch({
             <CommandGroup heading="Help">
               <CommandItem value="help-search" onSelect={() => go("/settings")}>
                 <CircleHelp aria-hidden="true" />
-                Where does the demo data come from?
+                Where does the outlet data come from?
               </CommandItem>
               <CommandItem value="help-templates" onSelect={() => go("/templates")}>
                 <Search aria-hidden="true" />
-                How template approval works in this prototype
+                How template approval works
               </CommandItem>
             </CommandGroup>
           </>

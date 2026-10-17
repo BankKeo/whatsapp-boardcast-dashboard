@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Megaphone, Plus, Users } from "lucide-react";
 import { toast } from "sonner";
 import { formatNumber } from "@/lib/format";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { useAppStore } from "@/lib/store/app-store";
 import type { Segment } from "@/types/segment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,15 +19,15 @@ import { SavedSegmentsTable } from "./saved-segments-table";
 type SegmentTab = "builder" | "saved";
 
 export function SegmentsScreen() {
-  const store = useDemoStore();
+  const store = useAppStore();
   const [tab, setTab] = React.useState<SegmentTab>("builder");
   const [editing, setEditing] = React.useState<Segment | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<Segment | null>(null);
 
-  // Deep link support: /segments#segment=seg-001
+  // Deep link support: /segments#segment=<id>
   React.useEffect(() => {
     if (!store.ready) return;
-    const match = window.location.hash.match(/^#segment=(seg-[\w-]+)$/i);
+    const match = window.location.hash.match(/^#segment=([\w-]+)$/i);
     if (!match) return;
     const segment = store.segments.find((item) => item.id === match[1]);
     if (segment) {
@@ -78,12 +78,12 @@ export function SegmentsScreen() {
         }
         meta={
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">{formatNumber(store.segments.length)} saved segments</Badge>
+            <Badge variant="outline">{formatNumber(store.segmentsTotal)} saved segments</Badge>
             <Badge variant="outline">
-              {formatNumber(store.outletStats.eligible)} WhatsApp-eligible contacts
+              {formatNumber(store.outletStats?.eligible ?? 0)} WhatsApp-eligible contacts
             </Badge>
             <Badge variant="outline">
-              {formatNumber(store.outletStats.consented)} with consent on file
+              {formatNumber(store.outletStats?.consented ?? 0)} with consent on file
             </Badge>
           </div>
         }
@@ -97,7 +97,7 @@ export function SegmentsScreen() {
           </TabsTrigger>
           <TabsTrigger value="saved">
             Saved segments
-            <Badge variant="secondary">{store.segments.length}</Badge>
+            <Badge variant="secondary">{store.segmentsTotal}</Badge>
           </TabsTrigger>
         </TabsList>
 
@@ -140,10 +140,17 @@ export function SegmentsScreen() {
         destructive
         onConfirm={() => {
           if (!deleteTarget) return;
-          store.deleteSegment(deleteTarget.id);
-          if (editing?.id === deleteTarget.id) setEditing(null);
-          toast.success("Segment deleted", { description: `“${deleteTarget.name}” was removed.` });
+          const target = deleteTarget;
+          if (editing?.id === target.id) setEditing(null);
           setDeleteTarget(null);
+          void store
+            .deleteSegment(target.id)
+            .then(() =>
+              toast.success("Segment deleted", { description: `“${target.name}” was removed.` }),
+            )
+            .catch((cause: unknown) =>
+              toast.error(cause instanceof Error ? cause.message : "The segment could not be deleted."),
+            );
         }}
       />
     </div>

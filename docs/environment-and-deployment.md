@@ -13,62 +13,69 @@
 
 ## Environment variables
 
-The prototype needs **none**. It reads no configuration and holds no secrets.
-
-When integrations are added, use this split:
+The dashboard needs exactly one variable:
 
 | Variable | Scope | Purpose |
 | --- | --- | --- |
-| `DATABASE_URL` | server only | Outlet/consent/campaign service of record. |
-| `WHATSAPP_BUSINESS_ACCOUNT_ID` | server only | Business account for template and send calls. |
-| `WHATSAPP_PHONE_NUMBER_ID` | server only | Sender identity. |
-| `WHATSAPP_ACCESS_TOKEN` | server only | Graph API access token; rotate regularly, never log it. |
-| `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | server only | Webhook verification handshake. |
-| `WHATSAPP_APP_SECRET` | server only | Webhook signature validation. |
-| `AUTH_SECRET` / IdP settings | server only | Session signing or identity provider. |
-| `NEXT_PUBLIC_APP_NAME` | public | Safe, non-sensitive branding value. |
+| `NEXT_PUBLIC_API_URL` | public | Base URL of the Partner Club API, including the version prefix (default `http://localhost:4000/api/v1`). |
+
+Copy [`.env.example`](../.env.example) to `.env.local`. It is inlined into the
+client bundle, so only non-sensitive values belong there — **never** a WhatsApp
+access token, app secret or database URL.
+
+Everything else (MongoDB, JWT secrets, WhatsApp credentials, queue driver) is
+owned by the API deployment; see the backend `.env.example`. The dashboard
+learns the provider state at runtime from `GET /whatsapp/health`, which reports
+`simulated: true` whenever no real WhatsApp credentials are configured.
 
 Rules:
 
-- Only `NEXT_PUBLIC_*` values reach the browser. Never put a token or id there.
-- Validate environment variables at boot with Zod (reuse `lib/schemas/`) so a
-  misconfigured deployment fails fast instead of silently running in demo mode.
-- Keep `.env*` out of version control (already ignored) and document the required
-  keys in this file.
+- Only `NEXT_PUBLIC_*` values reach the browser.
+- CORS on the API must allow this origin (`FRONTEND_URL` / `CORS_ORIGINS` on the
+  backend), and requests are sent with credentials so the HTTP-only refresh
+  cookie is accepted.
+
+## Request authentication
+
+1. `POST /auth/login` with email + password returns a short-lived access token in
+   the response body and sets an HTTP-only refresh cookie scoped to
+   `/api/v1/auth`.
+2. The access token is kept in memory only (`lib/api/client.ts`); nothing is
+   written to `localStorage`.
+3. On a cold load, `POST /auth/refresh` restores the session from the cookie.
+4. A `401` on any request triggers one single-flight refresh and a retry, so
+   parallel calls cannot rotate the refresh token several times at once.
+5. `POST /auth/logout` revokes the refresh token server-side and clears cookies.
 
 ## Deployment shape
 
 ```
-CDN (static shell)  ->  Next.js server (SSR + server actions)  ->  Database
-                             |                    |
-                             |                    └─  Queue/worker (campaign sends, imports)
-                             └─  WhatsApp Business Platform (Graph API + webhooks)
+CDN (static shell)  ->  Next.js server  ->  Partner Club API  ->  MongoDB
+                                                |
+                                                └─  Queue/worker (campaign sends, imports)
 ```
 
-- The app already renders a static shell with Partial Prerendering, so most
-  routes can be served from a CDN. Any route that reads real data must move that
-  read into `use cache` or behind `<Suspense>` (Cache Components is enabled, and
-  the dev overlay will point at the exact spot).
-- Long work (bulk CSV import, campaign fan-out) belongs in a queue, not in a
-  request. The prototype's simulate-send path is intentionally synchronous.
-- Sends must be idempotent: key each attempt by `campaignId + outletId` so a
-  retry cannot double-message a contact.
-- Add rate limiting per campaign and per contact window before enabling real
-  sends, and honour the WhatsApp messaging window for the recipient's timezone.
+- The app renders a static shell with Partial Prerendering; data is fetched
+  client-side from the API with `AbortController`, so no route reads the database
+  directly.
+- Long work (bulk CSV import, campaign fan-out) runs in the API's queue, not in a
+  request. `POST /campaigns/:id/send` prepares recipients and enqueues dispatch,
+  so the request returns immediately.
+- Sends are idempotent server-side (`campaignId + outletId`) and re-resolve
+  consent at send time.
+- The API applies rate limiting and a rolling 24-hour per-contact cap
+  (`MESSAGING_DAILY_CAP_PER_CONTACT`).
 
 ## Operational requirements
 
 - **Backups** for outlet and consent data; retention policy for consent evidence.
-- **Observability**: log every send decision (included/excluded + reason), every
-  webhook receipt, and every template status change.
-- **Audit**: keep the append-only audit trail the UI already visualises in
-  Settings → Audit log.
-- **Cost model**: pricing must be configured before the reports screen can show
-  estimates. `PRICING.configured` in `lib/data/constants.ts` is the current
-  switch; keep it false until real prices exist.
-- **Demo data removal**: once the API is authoritative, remove
-  `lib/data/generate.ts`, the `localStorage` persistence in
-  `lib/store/demo-store.tsx`, and the “Reset demo data” controls.
+- **Observability**: the API logs every send decision (included/excluded +
+  reason), every webhook receipt, and every template status change.
+- **Audit**: the append-only audit trail is served by `GET /audit-logs` and
+  visualised in Settings → Audit log and the dashboard activity feed.
+- **Cost model**: pricing is the `reporting.pricing` settings section. Until an
+  administrator configures it, the review step and Settings report the estimate
+  as unavailable.
 
 ## Build and checks
 

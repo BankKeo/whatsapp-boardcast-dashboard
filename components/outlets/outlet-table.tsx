@@ -3,18 +3,9 @@
 import * as React from "react";
 import { Copy, Eye, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { formatRelative } from "@/lib/format";
+import { formatPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
-import {
-  buildDuplicatePhoneIndex,
-  getDataQuality,
-  isDuplicatePhone,
-  isEligible,
-  type OutletSort,
-  type OutletSortKey,
-} from "@/lib/services/outlet-service";
-import { formatPhone, getPhoneStatus } from "@/lib/phone";
-import type { Outlet } from "@/types/outlet";
-import { Badge } from "@/components/ui/badge";
+import type { Outlet, OutletSort, OutletSortKey } from "@/types/outlet";import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -33,8 +24,6 @@ import {
 
 export interface OutletTableProps {
   outlets: Outlet[];
-  /** Full dataset, used to detect duplicate phone numbers across records. */
-  allOutlets: Outlet[];
   sort: OutletSort;
   onSortChange: (key: OutletSortKey) => void;
   selectedIds: string[];
@@ -47,7 +36,6 @@ export interface OutletTableProps {
 
 export function OutletTable({
   outlets,
-  allOutlets,
   sort,
   onSortChange,
   selectedIds,
@@ -57,8 +45,6 @@ export function OutletTable({
   onDelete,
   isLoading = false,
 }: OutletTableProps) {
-  const duplicates = React.useMemo(() => buildDuplicatePhoneIndex(allOutlets), [allOutlets]);
-
   const columns = React.useMemo<DataTableColumn<Outlet>[]>(
     () => [
       {
@@ -90,35 +76,31 @@ export function OutletTable({
         key: "phone",
         header: "Phone number",
         sortKey: "phone",
-        render: (outlet) => {
-          const status = getPhoneStatus(outlet.phone);
-          const duplicate = isDuplicatePhone(outlet, duplicates);
-          return (
-            <span className="flex items-center gap-1.5 whitespace-nowrap tabular-nums">
-              {status === "Missing" ? (
-                <span className="text-muted-foreground">—</span>
-              ) : (
-                formatPhone(outlet.phone)
-              )}
-              {status !== "Valid" || duplicate ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span>
-                      <Badge variant={status === "Valid" ? "warning" : "destructive"}>
-                        {status !== "Valid" ? status : "Duplicate"}
-                      </Badge>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {status !== "Valid"
-                      ? "This contact cannot receive WhatsApp messages until the number is corrected."
-                      : "Another outlet record uses the same phone number."}
-                  </TooltipContent>
-                </Tooltip>
-              ) : null}
-            </span>
-          );
-        },
+        render: (outlet) => (
+          <span className="flex items-center gap-1.5 whitespace-nowrap tabular-nums">
+            {outlet.phoneStatus === "Missing" ? (
+              <span className="text-muted-foreground">—</span>
+            ) : (
+              formatPhone(outlet.phone)
+            )}
+            {outlet.phoneStatus !== "Valid" || outlet.duplicatePhone ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Badge variant={outlet.phoneStatus === "Valid" ? "warning" : "destructive"}>
+                      {outlet.phoneStatus !== "Valid" ? outlet.phoneStatus : "Duplicate"}
+                    </Badge>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {outlet.phoneStatus !== "Valid"
+                    ? "This contact cannot receive WhatsApp messages until the number is corrected."
+                    : "Another outlet record uses the same phone number."}
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
+          </span>
+        ),
       },
       {
         key: "province",
@@ -149,16 +131,8 @@ export function OutletTable({
         sortKey: "eligibility",
         render: (outlet) => (
           <div className="flex flex-col items-start gap-1">
-            <EligibilityBadge
-              status={
-                isEligible(outlet)
-                  ? "Eligible"
-                  : getPhoneStatus(outlet.phone) !== "Valid"
-                    ? "Ineligible"
-                    : "Not verified"
-              }
-            />
-            <DataQualityBadge quality={getDataQuality(outlet, duplicates)} />
+            <EligibilityBadge status={outlet.whatsappEligibility} />
+            <DataQualityBadge quality={outlet.dataQualityStatus} />
           </div>
         ),
       },
@@ -217,7 +191,7 @@ export function OutletTable({
         ),
       },
     ],
-    [duplicates, onDelete, onEdit, onView],
+    [onDelete, onEdit, onView],
   );
 
   return (

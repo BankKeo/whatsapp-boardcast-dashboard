@@ -11,8 +11,8 @@ export default function NotFound() {
       <Card>
         <EmptyState
           icon={<Compass aria-hidden="true" />}
-          title="This screen is not part of the prototype"
-          description="Check the navigation or return to the Partner Club overview. Campaign references created in another browser are not available here."
+          title="This screen does not exist"
+          description="Check the address or return to the Partner Club overview."
           action={
             <div className="flex flex-wrap items-center justify-center gap-2">
               <Button asChild size="sm">

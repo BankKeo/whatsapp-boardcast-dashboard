@@ -7,7 +7,8 @@ import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { templateFormSchema, type TemplateFormValues } from "@/lib/schemas/template";
 import { variablesForBody } from "@/lib/services/template-service";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { useAppStore } from "@/lib/store/app-store";
+import { ApiError } from "@/lib/api/client";
 import { TEMPLATE_CATEGORIES, type MessageTemplate } from "@/types/template";
 import { Button } from "@/components/ui/button";
 import {
@@ -51,7 +52,7 @@ export function TemplateFormDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const store = useDemoStore();
+  const store = useAppStore();
   const isEdit = Boolean(template);
 
   const form = useForm<TemplateFormValues>({
@@ -88,21 +89,32 @@ export function TemplateFormDialog({
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit template" : "New template"}</DialogTitle>
           <DialogDescription>
-            Templates created here are stored locally as drafts. They are not submitted to WhatsApp
-            and are never marked as approved by Meta.
+            Templates are stored by the API. A new template starts as a draft and can be submitted
+            for approval before a campaign uses it.
           </DialogDescription>
         </DialogHeader>
 
         <Form {...form}>
           <form
-            onSubmit={form.handleSubmit((values) => {
-              const saved = store.saveTemplate(values, template?.id);
-              toast.success(isEdit ? "Template updated" : "Template created", {
-                description: isEdit
-                  ? `${saved.name} was updated.`
-                  : `${saved.name} was saved as a draft and needs local review.`,
-              });
-              onOpenChange(false);
+            onSubmit={form.handleSubmit(async (values) => {
+              try {
+                const saved = await store.saveTemplate(values, template?.id);
+                toast.success(isEdit ? "Template updated" : "Template created", {
+                  description: isEdit
+                    ? `${saved.name} was updated.`
+                    : `${saved.name} was saved as a draft. Submit it for approval when it is ready.`,
+                });
+                onOpenChange(false);
+              } catch (cause) {
+                if (cause instanceof ApiError) {
+                  for (const [field, message] of Object.entries(cause.fieldErrors)) {
+                    form.setError(field as keyof TemplateFormValues, { type: "server", message });
+                  }
+                }
+                toast.error(
+                  cause instanceof ApiError ? cause.message : "The template could not be saved.",
+                );
+              }
             })}
             className="grid gap-4 lg:grid-cols-2"
             noValidate

@@ -8,10 +8,13 @@ import { toast } from "sonner";
 import { formatNumber } from "@/lib/format";
 import { formatPhone } from "@/lib/phone";
 import { PROVINCES, districtsFor } from "@/lib/data/constants";
-import { countAudience } from "@/lib/services/outlet-service";
-import { previewAudience, suggestSegmentName } from "@/lib/services/segment-service";
+import { suggestSegmentName } from "@/lib/services/segment-service";
+import { previewSegment } from "@/lib/api/segments";
+import { fetchAudienceBreakdown } from "@/lib/api/outlets";
+import { ApiError } from "@/lib/api/client";
+import { useAsync } from "@/lib/hooks/use-async";
 import { segmentFormSchema, type SegmentFormValues } from "@/lib/schemas/segment";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { useAppStore } from "@/lib/store/app-store";
 import { createEmptyFilters, type Segment } from "@/types/segment";
 import {
   DATA_QUALITY_LEVELS,
@@ -53,11 +56,23 @@ export interface SegmentBuilderProps {
   onCancelEdit?: () => void;
 }
 
+/** Wait long enough to coalesce rule changes before hitting the API. */
+function debounce(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    });
+  });
+}
+
 export function SegmentBuilder({ segment, onSaved, onCancelEdit }: SegmentBuilderProps) {
-  const store = useDemoStore();
+  const store = useAppStore();
   const [filters, setFilters] = React.useState<OutletFilters>(
     segment?.filters ?? createEmptyFilters(),
   );
+  const [saving, setSaving] = React.useState(false);
 
   React.useEffect(() => {
     setFilters(segment?.filters ?? createEmptyFilters());
@@ -82,10 +97,30 @@ export function SegmentBuilder({ segment, onSaved, onCancelEdit }: SegmentBuilde
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters, segment?.id]);
 
-  const audience = React.useMemo(
-    () => previewAudience(store.outlets, filters, 8),
-    [store.outlets, filters],
-  );
+  /*
+   * The audience is resolved by the API: one preview call for the count and
+   * sample, plus one breakdown per category for the rule hints. Everything is
+   * debounced and aborted so a fast typist cannot flood the register.
+   */
+  const preview = useAsync(async (signal) => {
+    await debounce(250, signal);
+    const [audience, ...categoryBreakdowns] = await Promise.all([
+      previewSegment(filters, 8, signal),
+      ...OUTLET_CATEGORIES.map((category) =>
+        fetchAudienceBreakdown({ ...filters, categories: [category] }, signal),
+      ),
+    ]);
+    return {
+      count: audience.count,
+      sample: audience.sample,
+      categoryCounts: new Map(
+        OUTLET_CATEGORIES.map((category, index) => [category, categoryBreakdowns[index].matched]),
+      ),
+    };
+  }, [filters]);
+
+  const audience = preview.data;
+  const totalMatched = audience?.count ?? 0;
 
   function update(patch: Partial<OutletFilters>) {
     setFilters((current) => ({ ...current, ...patch }));
@@ -97,10 +132,10 @@ export function SegmentBuilder({ segment, onSaved, onCancelEdit }: SegmentBuilde
         value: province.name,
         label: province.name,
         hint: formatNumber(
-          store.outletStats.byProvince.find((entry) => entry.province === province.name)?.count ?? 0,
+          store.outletStats?.byProvince.find((entry) => entry.province === province.name)?.count ?? 0,
         ),
       })),
-    [store.outletStats.byProvince],
+    [store.outletStats],
   );
 
   const districtOptions = React.useMemo(() => {
@@ -117,33 +152,38 @@ export function SegmentBuilder({ segment, onSaved, onCancelEdit }: SegmentBuilde
     );
   }, [filters.provinces]);
 
-  const categoryCounts = React.useMemo(
-    () =>
-      new Map(
-        OUTLET_CATEGORIES.map((category) => [
-          category,
-          countAudience(store.outlets, { ...filters, categories: [category] }),
-        ]),
-      ),
-    [store.outlets, filters],
-  );
+  const categoryCounts = audience?.categoryCounts ?? new Map();
 
-  function handleSubmit(values: SegmentFormValues) {
-    if (audience.count === 0) {
+  async function handleSubmit(values: SegmentFormValues) {
+    if (preview.loading) return;
+    if (totalMatched === 0) {
       toast.error("No matching outlets", {
         description:
           "This audience does not match any outlet records, so it cannot be saved. Relax the rules first.",
       });
       return;
     }
-    const saved = store.saveSegment({ ...values, filters }, segment?.id);
-    toast.success(segment ? "Segment updated" : "Segment saved", {
-      description: `“${saved.name}” currently matches ${formatNumber(audience.count)} outlets.`,
-    });
-    onSaved(saved);
-    if (!segment) {
-      form.reset({ name: "", description: "", filters });
-      setFilters(createEmptyFilters());
+
+    setSaving(true);
+    try {
+      const saved = await store.saveSegment({ ...values, filters }, segment?.id);
+      toast.success(segment ? "Segment updated" : "Segment saved", {
+        description: `“${saved.name}” currently matches ${formatNumber(saved.matchCount ?? totalMatched)} outlets.`,
+      });
+      onSaved(saved);
+      if (!segment) {
+        form.reset({ name: "", description: "", filters });
+        setFilters(createEmptyFilters());
+      }
+    } catch (cause) {
+      if (cause instanceof ApiError) {
+        for (const [field, message] of Object.entries(cause.fieldErrors)) {
+          form.setError(field as keyof SegmentFormValues, { type: "server", message });
+        }
+      }
+      toast.error(cause instanceof ApiError ? cause.message : "The segment could not be saved.");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -425,12 +465,12 @@ export function SegmentBuilder({ segment, onSaved, onCancelEdit }: SegmentBuilde
                   audience size updates as the outlet database changes.
                 </p>
                 <div className="flex items-center gap-2">
-                  <Button type="submit" size="sm">
+                  <Button type="submit" size="sm" loading={saving}>
                     <Save aria-hidden="true" />
                     {segment ? "Update segment" : "Save segment"}
                   </Button>
                   <span className="text-[12px] text-muted-foreground">
-                    {formatNumber(audience.count)} outlets match right now
+                    {formatNumber(totalMatched)} outlets match right now
                   </span>
                 </div>
               </form>
@@ -446,11 +486,11 @@ export function SegmentBuilder({ segment, onSaved, onCancelEdit }: SegmentBuilde
               Live matching outlets
             </p>
             <p className="text-3xl font-semibold tabular-nums tracking-tight">
-              {formatNumber(audience.count)}
+              {preview.loading && !audience ? "…" : formatNumber(totalMatched)}
             </p>
             <p className="text-[12px] text-muted-foreground">
-              of {formatNumber(store.outletStats.total)} outlet records · counted from the demo
-              dataset, not estimated
+              of {formatNumber(store.outletStats?.total ?? 0)} outlet records · resolved by the API
+              from the rules below
             </p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {filters.eligibility === "eligible" ? (
@@ -476,12 +516,19 @@ export function SegmentBuilder({ segment, onSaved, onCancelEdit }: SegmentBuilde
             <div>
               <CardTitle>Preview matching outlets</CardTitle>
               <CardDescription>
-                First {audience.sample.length} of {formatNumber(audience.count)} matching records.
+                First {audience?.sample.length ?? 0} of {formatNumber(totalMatched)} matching records.
               </CardDescription>
             </div>
           </CardHeader>
           <CardContent className="px-0 pb-2">
-            {audience.sample.length === 0 ? (
+            {preview.error ? (
+              <div className="flex flex-col items-center gap-1 px-4 py-8 text-center">
+                <p className="text-[13px] font-medium text-destructive">{preview.error}</p>
+                <Button variant="outline" size="sm" onClick={preview.reload}>
+                  Try again
+                </Button>
+              </div>
+            ) : (audience?.sample.length ?? 0) === 0 ? (
               <div className="flex flex-col items-center gap-1 px-4 py-8 text-center">
                 <Users className="size-5 text-muted-foreground" aria-hidden="true" />
                 <p className="text-[13px] font-medium">No outlets match these rules</p>
@@ -491,7 +538,7 @@ export function SegmentBuilder({ segment, onSaved, onCancelEdit }: SegmentBuilde
               </div>
             ) : (
               <ul className="flex flex-col">
-                {audience.sample.map((outlet: Outlet) => (
+                {(audience?.sample ?? []).map((outlet: Outlet) => (
                   <li
                     key={outlet.id}
                     className="flex items-start justify-between gap-3 border-b border-border px-4 py-2 last:border-0"
@@ -502,15 +549,7 @@ export function SegmentBuilder({ segment, onSaved, onCancelEdit }: SegmentBuilde
                         {outlet.district}, {outlet.province} · {formatPhone(outlet.phone)}
                       </p>
                     </div>
-                    <EligibilityBadge
-                      status={
-                        outlet.whatsappVerified
-                          ? "Eligible"
-                          : outlet.phone
-                            ? "Not verified"
-                            : "Ineligible"
-                      }
-                    />
+                    <EligibilityBadge status={outlet.whatsappEligibility} />
                   </li>
                 ))}
               </ul>

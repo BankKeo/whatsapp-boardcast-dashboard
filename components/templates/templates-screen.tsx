@@ -7,7 +7,8 @@ import { Copy, Eye, MoreHorizontal, Pencil, Plus, Search, Trash2 } from "lucide-
 import { toast } from "sonner";
 import { formatNumber, formatRelative } from "@/lib/format";
 import { filterTemplates as applyTemplateFilters } from "@/lib/services/template-service";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { useAppStore } from "@/lib/store/app-store";
+import { ApiError } from "@/lib/api/client";
 import { TEMPLATE_STATUSES, type MessageTemplate, type TemplateLanguage, type TemplateStatus } from "@/types/template";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,7 +38,7 @@ import { TemplateFormDialog } from "./template-form-dialog";
 import { TemplatePreviewSheet } from "./template-preview-sheet";
 
 export function TemplatesScreen() {
-  const store = useDemoStore();
+  const store = useAppStore();
   const router = useRouter();
   const [search, setSearch] = React.useState("");
   const [status, setStatus] = React.useState<TemplateStatus | "all">("all");
@@ -52,10 +53,10 @@ export function TemplatesScreen() {
     [store.templates, search, status, language],
   );
 
-  // Deep link support: /templates#template=tpl-001
+  // Deep link support: /templates#template=<id>
   React.useEffect(() => {
     if (!store.ready) return;
-    const match = window.location.hash.match(/^#template=(tpl-[\w-]+)$/i);
+    const match = window.location.hash.match(/^#template=([\w-]+)$/i);
     if (!match) return;
     const template = store.templates.find((item) => item.id === match[1]);
     if (template) setPreview(template);
@@ -165,12 +166,20 @@ export function TemplatesScreen() {
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={() => {
-                    const copy = store.duplicateTemplate(template.id);
-                    if (copy) {
-                      toast.success("Template duplicated", {
-                        description: `“${copy.name}” was created as a draft.`,
-                      });
-                    }
+                    void store
+                      .duplicateTemplate(template.id)
+                      .then((copy) =>
+                        toast.success("Template duplicated", {
+                          description: `“${copy.name}” was created as a draft.`,
+                        }),
+                      )
+                      .catch((cause: unknown) =>
+                        toast.error(
+                          cause instanceof ApiError
+                            ? cause.message
+                            : "The template could not be duplicated.",
+                        ),
+                      );
                   }}
                 >
                   <Copy aria-hidden="true" />
@@ -217,7 +226,7 @@ export function TemplatesScreen() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Message Templates"
-        description="Templates control what recipients read. Locally approved templates can be used in demo campaigns; WhatsApp review is not connected."
+        description="Templates control what recipients read. Approved templates can be dispatched; the workflow status is tracked by the API."
         headerAction={
           <Button
             size="sm"
@@ -232,10 +241,10 @@ export function TemplatesScreen() {
         }
         meta={
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="success">{formatNumber(approvedCount)} locally approved</Badge>
-            <Badge variant="warning">{formatNumber(pendingCount)} pending local review</Badge>
+            <Badge variant="success">{formatNumber(approvedCount)} approved</Badge>
+            <Badge variant="warning">{formatNumber(pendingCount)} awaiting approval</Badge>
             <Badge variant="outline">
-              {formatNumber(store.templates.length)} templates in the library
+              {formatNumber(store.templatesTotal)} templates in the library
             </Badge>
           </div>
         }
@@ -306,7 +315,7 @@ export function TemplatesScreen() {
           <span className="font-semibold tabular-nums text-foreground">
             {formatNumber(templates.length)}
           </span>{" "}
-          of {formatNumber(store.templates.length)} templates shown
+          of {formatNumber(store.templatesTotal)} templates shown
         </p>
       </Card>
 
@@ -356,17 +365,24 @@ export function TemplatesScreen() {
         title="Delete this template?"
         description={
           <>
-            “{deleteTarget?.name}” will be removed from the local library. Campaigns that already
-            used it keep their message text and reports.
+            “{deleteTarget?.name}” will be removed from the library. Campaigns that already used it
+            keep their message text and reports.
           </>
         }
         confirmLabel="Delete template"
         destructive
         onConfirm={() => {
           if (!deleteTarget) return;
-          store.deleteTemplate(deleteTarget.id);
-          toast.success("Template deleted", { description: deleteTarget.name });
+          const target = deleteTarget;
           setDeleteTarget(null);
+          void store
+            .deleteTemplate(target.id)
+            .then(() => toast.success("Template deleted", { description: target.name }))
+            .catch((cause: unknown) =>
+              toast.error(
+                cause instanceof ApiError ? cause.message : "The template could not be deleted.",
+              ),
+            );
         }}
       />
 

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   BarChart3,
-  FlaskConical,
+  Database,
   FileText,
   LayoutDashboard,
   Megaphone,
@@ -17,6 +17,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useSession } from "@/lib/auth/session";
 
 export const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
@@ -25,8 +26,8 @@ export const NAV_ITEMS = [
   { href: "/campaigns", label: "Campaigns", icon: Megaphone },
   { href: "/templates", label: "Message Templates", icon: FileText },
   { href: "/reports", label: "Campaign Reports", icon: BarChart3 },
-  { href: "/team", label: "Team & Permissions", icon: ShieldCheck },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/team", label: "Team & Permissions", icon: ShieldCheck, adminOnly: true },
+  { href: "/settings", label: "Settings", icon: Settings, adminOnly: true },
 ] as const;
 
 export function isNavItemActive(pathname: string, href: string, exact?: boolean) {
@@ -42,11 +43,17 @@ interface SidebarNavProps {
 
 export function SidebarNav({ collapsed = false, onNavigate, showLabels = true }: SidebarNavProps) {
   const pathname = usePathname();
+  const { hasRole } = useSession();
+  const isAdministrator = hasRole("Administrator");
+
+  // Team and Settings are Administrator-only on the API, so they are hidden for
+  // everyone else rather than shown as a link that returns 403.
+  const items = NAV_ITEMS.filter((item) => !("adminOnly" in item && item.adminOnly) || isAdministrator);
 
   return (
     <nav aria-label="Main navigation" className="flex flex-col gap-0.5 px-2">
       <ul className="flex flex-col gap-0.5">
-        {NAV_ITEMS.map((item) => {
+        {items.map((item) => {
           const active = isNavItemActive(pathname, item.href, "exact" in item ? item.exact : false);
           const Icon = item.icon;
           return (
@@ -92,9 +99,9 @@ export function SidebarNav({ collapsed = false, onNavigate, showLabels = true }:
           collapsed && showLabels && "hidden",
         )}
       >
-        <FlaskConical className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden="true" />
+        <Database className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <p>
-          Prototype with sample data. WhatsApp Business Platform is not connected.
+          Live data from the Partner Club API. Sends follow the configured WhatsApp provider.
         </p>
       </div>
     </nav>

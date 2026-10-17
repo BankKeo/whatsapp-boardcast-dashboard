@@ -20,7 +20,8 @@ export interface TeamMember {
   role: TeamRole;
   status: TeamMemberStatus;
   lastActive: string | null;
-  invitedAt: string;
+  lastLoginAt: string | null;
+  invitedAt: string | null;
 }
 
 /** Role capability matrix used for the role-based UI states in the prototype. */

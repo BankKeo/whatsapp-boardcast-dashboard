@@ -2,7 +2,7 @@ import * as React from "react";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { CampaignStatus } from "@/types/campaign";
-import type { DataQuality, OutletCategory } from "@/types/outlet";
+import type { DataQuality, OutletCategory, WhatsappEligibility } from "@/types/outlet";
 import type { TemplateStatus } from "@/types/template";
 import type { TeamMemberStatus } from "@/types/team";
 
@@ -57,11 +57,11 @@ export function EligibilityBadge({
   status,
   className,
 }: {
-  status: "Eligible" | "Not verified" | "Ineligible";
+  status: WhatsappEligibility;
   className?: string;
 }) {
   const variant: Variant =
-    status === "Eligible" ? "success" : status === "Not verified" ? "secondary" : "destructive";
+    status === "Eligible" ? "success" : status === "Needs review" ? "secondary" : "destructive";
   return (
     <Badge variant={variant} className={className}>
       {status}
@@ -148,11 +148,17 @@ export function ConnectionBadge({
   status,
   className,
 }: {
-  status: "demo" | "connected" | "disconnected";
+  status: "simulated" | "connected" | "disconnected";
   className?: string;
 }) {
-  const label = status === "demo" ? "Demo mode" : status === "connected" ? "Connected" : "Not connected";
-  const variant: Variant = status === "connected" ? "success" : status === "demo" ? "warning" : "outline";
+  const label =
+    status === "simulated"
+      ? "Simulated"
+      : status === "connected"
+        ? "Connected"
+        : "Not connected";
+  const variant: Variant =
+    status === "connected" ? "success" : status === "simulated" ? "warning" : "outline";
   return (
     <Badge variant={variant} className={className}>
       {label}

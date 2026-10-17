@@ -11,15 +11,19 @@ import {
   Megaphone,
   Pencil,
   Send,
-  Trash2,
   Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate, formatDateTime, formatNumber, formatPercent } from "@/lib/format";
 import { describeFilters } from "@/lib/services/outlet-service";
-import { metricsByGroup } from "@/lib/services/campaign-service";
 import { renderTemplate } from "@/lib/services/template-service";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { getCampaign } from "@/lib/api/campaigns";
+import { provincePerformance } from "@/lib/api/reports";
+import { previewSegment } from "@/lib/api/segments";
+import { ApiError } from "@/lib/api/client";
+import { useAsync } from "@/lib/hooks/use-async";
+import { useAppStore } from "@/lib/store/app-store";
+import { isDeliverable } from "@/types/outlet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,40 +46,37 @@ import { CampaignEditDialog } from "./campaign-edit-dialog";
 import { WhatsAppPreview } from "./whatsapp-preview";
 
 export function CampaignDetailScreen({ campaignId }: { campaignId: string }) {
-  const store = useDemoStore();
+  const store = useAppStore();
   const router = useRouter();
   const [editOpen, setEditOpen] = React.useState(false);
-  const [deleteOpen, setDeleteOpen] = React.useState(false);
-  const [simulateOpen, setSimulateOpen] = React.useState(false);
+  const [sendOpen, setSendOpen] = React.useState(false);
   const [cancelOpen, setCancelOpen] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
 
-  const campaign = store.campaigns.find((item) => item.id === campaignId) ?? null;
+  const campaignQuery = useAsync((signal) => getCampaign(campaignId, signal), [campaignId]);
+  const campaign = campaignQuery.data;
+
   const template = campaign?.templateId
     ? store.templates.find((item) => item.id === campaign.templateId) ?? null
     : null;
 
-  const groups = React.useMemo(
-    () => (campaign ? metricsByGroup([campaign], store.outlets, "province") : []),
-    [campaign, store.outlets],
-  );
+  // Province delivery is joined server-side to each recipient's outlet.
+  const groups = useAsync(
+    (signal) =>
+      campaign ? provincePerformance({ campaignId: campaign.id, signal }) : Promise.resolve([]),
+    [campaign?.id],
+  ).data;
 
-  const sampleOutlet = React.useMemo(
-    () =>
-      store.outlets.find(
-        (outlet) =>
-          outlet.whatsappVerified &&
-          outlet.marketingConsent &&
-          (campaign?.audience.provinces.length ?? 0) > 0
-            ? campaign!.audience.provinces.includes(outlet.province)
-            : true,
-      ) ?? null,
-    [store.outlets, campaign],
-  );
+  const samplePreview = useAsync(
+    (signal) => (campaign ? previewSegment(campaign.audience, 8, signal) : Promise.resolve(null)),
+    [campaign?.id],
+  ).data;
+  const sampleOutlet = (samplePreview?.sample ?? []).find(isDeliverable) ?? null;
 
-  if (!store.ready) {
+  if (campaignQuery.loading && !campaign) {
     return (
       <div className="flex flex-col gap-4">
-        <PageHeader title="Campaign" description="Loading campaign from the demo dataset…" />
+        <PageHeader title="Campaign" description="Loading campaign…" />
         <LoadingState variant="page" />
       </div>
     );
@@ -86,7 +87,9 @@ export function CampaignDetailScreen({ campaignId }: { campaignId: string }) {
       <div className="flex flex-col gap-4">
         <PageHeader
           title="Campaign not found"
-          description={`No campaign with reference ${campaignId} exists in this browser's demo data.`}
+          description={
+            campaignQuery.error ?? `No campaign with reference ${campaignId} exists.`
+          }
           breadcrumbs={[{ label: "Campaigns", href: "/campaigns" }, { label: "Not found" }]}
           headerAction={
             <Button asChild size="sm">
@@ -97,8 +100,8 @@ export function CampaignDetailScreen({ campaignId }: { campaignId: string }) {
         <Card>
           <EmptyState
             icon={<Megaphone aria-hidden="true" />}
-            title="This campaign is not in the demo dataset"
-            description="Campaigns created in one browser are only stored locally. Reset the demo data or create the campaign again to see it here."
+            title="This campaign could not be loaded"
+            description="It may have been removed, or the reference may be incorrect."
             action={
               <Button asChild size="sm">
                 <Link href="/campaigns/new">Create campaign</Link>
@@ -111,6 +114,32 @@ export function CampaignDetailScreen({ campaignId }: { campaignId: string }) {
   }
 
   const metrics = campaign.metrics;
+  const activeCampaign = campaign;
+
+  /** Run the API transition chain, then refresh this page. */
+  function run(action: "send" | "cancel") {
+    setBusy(true);
+    void (async () => {
+      try {
+        if (action === "send") {
+          await store.submitCampaign(activeCampaign.id);
+          await store.approveCampaign(activeCampaign.id);
+          await store.sendCampaign(activeCampaign.id);
+          toast.success("Send started", { description: activeCampaign.name });
+        } else {
+          await store.cancelCampaign(activeCampaign.id);
+          toast.success("Campaign cancelled");
+        }
+        campaignQuery.reload();
+      } catch (cause) {
+        toast.error(
+          cause instanceof ApiError ? cause.message : "The action could not be completed.",
+        );
+      } finally {
+        setBusy(false);
+      }
+    })();
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -120,10 +149,10 @@ export function CampaignDetailScreen({ campaignId }: { campaignId: string }) {
         breadcrumbs={[{ label: "Campaigns", href: "/campaigns" }, { label: campaign.name }]}
         headerAction={
           <div className="flex flex-wrap items-center gap-2">
-            {!campaign.sentAt ? (
-              <Button variant="outline" size="sm" onClick={() => setSimulateOpen(true)}>
+            {campaign.status === "Draft" || campaign.status === "Scheduled" ? (
+              <Button variant="outline" size="sm" disabled={busy} onClick={() => setSendOpen(true)}>
                 <Send aria-hidden="true" />
-                Simulate send
+                {store.health?.simulated ? "Simulate send" : "Send now"}
               </Button>
             ) : null}
             <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
@@ -133,14 +162,23 @@ export function CampaignDetailScreen({ campaignId }: { campaignId: string }) {
             <Button
               variant="outline"
               size="sm"
+              disabled={busy}
               onClick={() => {
-                const copy = store.duplicateCampaign(campaign.id);
-                if (copy) {
-                  toast.success("Campaign duplicated", {
-                    description: `“${copy.name}” was created as a draft.`,
-                  });
-                  router.push(`/campaigns/${copy.id}`);
-                }
+                void store
+                  .duplicateCampaign(campaign.id)
+                  .then((copy) => {
+                    toast.success("Campaign duplicated", {
+                      description: `“${copy.name}” was created as a draft.`,
+                    });
+                    router.push(`/campaigns/${copy.id}`);
+                  })
+                  .catch((cause: unknown) =>
+                    toast.error(
+                      cause instanceof ApiError
+                        ? cause.message
+                        : "The campaign could not be duplicated.",
+                    ),
+                  );
               }}
             >
               <Copy aria-hidden="true" />
@@ -291,15 +329,15 @@ export function CampaignDetailScreen({ campaignId }: { campaignId: string }) {
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             {campaign.status === "Scheduled" ? (
-              <Button variant="outline" size="sm" className="justify-start" onClick={() => setCancelOpen(true)}>
+              <Button variant="outline" size="sm" className="justify-start" disabled={busy} onClick={() => setCancelOpen(true)}>
                 <CalendarClock aria-hidden="true" />
                 Cancel schedule
               </Button>
             ) : null}
-            {!campaign.sentAt ? (
-              <Button variant="outline" size="sm" className="justify-start" onClick={() => setSimulateOpen(true)}>
+            {campaign.status === "Draft" || campaign.status === "Scheduled" ? (
+              <Button variant="outline" size="sm" className="justify-start" disabled={busy} onClick={() => setSendOpen(true)}>
                 <Send aria-hidden="true" />
-                Simulate send
+                {store.health?.simulated ? "Simulate send" : "Send now"}
               </Button>
             ) : null}
             <Button asChild variant="outline" size="sm" className="justify-start">
@@ -307,15 +345,6 @@ export function CampaignDetailScreen({ campaignId }: { campaignId: string }) {
                 <BarChart3 aria-hidden="true" />
                 Open in campaign reports
               </Link>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="justify-start text-destructive hover:text-destructive"
-              onClick={() => setDeleteOpen(true)}
-            >
-              <Trash2 aria-hidden="true" />
-              Delete campaign
             </Button>
           </CardContent>
         </Card>
@@ -351,18 +380,17 @@ export function CampaignDetailScreen({ campaignId }: { campaignId: string }) {
             <div>
               <CardTitle>Performance by province</CardTitle>
               <CardDescription>
-                Apportioned from the audience composition — demo metrics only, WhatsApp reports
-                arrive at campaign level.
+                Delivery joined to each recipient&apos;s outlet, aggregated by the API.
               </CardDescription>
             </div>
           </CardHeader>
           <CardContent className="px-0 pb-2">
-            {groups.length === 0 ? (
+            {!groups || groups.every((group) => group.attempted === 0) ? (
               <EmptyState
                 compact
                 icon={<AlertTriangle aria-hidden="true" />}
                 title="No delivery data for this campaign yet"
-                description="Simulate a send to generate demo metrics."
+                description="Delivery figures appear once the campaign has been dispatched."
               />
             ) : (
               <div className="overflow-x-auto">
@@ -377,23 +405,25 @@ export function CampaignDetailScreen({ campaignId }: { campaignId: string }) {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {groups.map((group) => (
-                      <TableRow key={group.key}>
-                        <TableCell className="pl-4">{group.label}</TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatNumber(group.attempted)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatNumber(group.delivered)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatNumber(group.failed)}
-                        </TableCell>
-                        <TableCell className="pr-4 text-right tabular-nums">
-                          {formatPercent(group.deliveryRate)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {groups
+                      .filter((group) => group.attempted > 0)
+                      .map((group) => (
+                        <TableRow key={group.key}>
+                          <TableCell className="pl-4">{group.label}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {formatNumber(group.attempted)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {formatNumber(group.delivered)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {formatNumber(group.failed)}
+                          </TableCell>
+                          <TableCell className="pr-4 text-right tabular-nums">
+                            {formatPercent(group.deliveryRate)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
                   </TableBody>
                 </Table>
               </div>
@@ -409,60 +439,40 @@ export function CampaignDetailScreen({ campaignId }: { campaignId: string }) {
       />
 
       <ConfirmDialog
-        open={simulateOpen}
-        onOpenChange={setSimulateOpen}
-        title="Simulate this send?"
+        open={sendOpen}
+        onOpenChange={setSendOpen}
+        title={store.health?.simulated ? "Run a simulated send?" : "Send this campaign now?"}
         description={
           <>
-            Demo delivery metrics will be generated locally for “{campaign.name}”. No WhatsApp
-            messages are delivered and no charges apply.
+            The API resolves the audience again, deduplicates to one message per number and applies
+            the daily per-contact cap.{" "}
+            {store.health?.simulated
+              ? "The mock provider reports delivery without contacting WhatsApp."
+              : "Messages are sent through the connected WhatsApp provider."}
           </>
         }
-        confirmLabel="Simulate send"
+        confirmLabel={store.health?.simulated ? "Run simulated send" : "Send now"}
         onConfirm={() => {
-          store.simulateSend(campaign.id);
-          toast.success("Demo send simulated", {
-            description: "Metrics were generated locally for reporting.",
-          });
+          setSendOpen(false);
+          run("send");
         }}
       />
 
       <ConfirmDialog
         open={cancelOpen}
         onOpenChange={setCancelOpen}
-        title="Cancel this scheduled campaign?"
+        title="Cancel this campaign?"
         description={
           <>
-            “{campaign.name}” will move to Cancelled. The audience snapshot is kept for reporting.
+            “{campaign.name}” will move to Cancelled. The audience snapshot is kept for reporting and
+            a queued send will not go out.
           </>
         }
         confirmLabel="Cancel campaign"
-        onConfirm={() => {
-          store.updateCampaign(campaign.id, { status: "Cancelled" });
-          store.logActivity(
-            "campaign",
-            `Scheduled campaign “${campaign.name}” was cancelled before sending.`,
-          );
-          toast.success("Campaign cancelled");
-        }}
-      />
-
-      <ConfirmDialog
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        title="Delete this campaign?"
-        description={
-          <>
-            “{campaign.name}” will be removed from this browser. Only drafts should be deleted —
-            cancel sent campaigns instead so reporting stays intact.
-          </>
-        }
-        confirmLabel="Delete campaign"
         destructive
         onConfirm={() => {
-          store.deleteCampaign(campaign.id);
-          toast.success("Campaign deleted");
-          router.push("/campaigns");
+          setCancelOpen(false);
+          run("cancel");
         }}
       />
     </div>

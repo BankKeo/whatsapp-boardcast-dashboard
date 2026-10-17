@@ -36,8 +36,10 @@ export interface Campaign {
   segmentName: string | null;
   /** Resolved audience definition used to compute recipients. */
   audience: OutletFilters;
-  /** Recipients counted from the outlet dataset when the campaign was created. */
+  /** Unique contacts matched by the audience rules. */
   recipients: number;
+  /** Deliverable recipients (eligible and consented), counted by the API. */
+  recipientCount: number;
   templateId: string | null;
   templateName: string | null;
   language: CampaignLanguage;
@@ -49,6 +51,10 @@ export interface Campaign {
   sentAt: string | null;
   /** Delivery metrics. Null until the campaign has been sent. */
   metrics: CampaignMetrics | null;
+  /** True while the WhatsApp provider is the simulator, never a real send. */
+  simulated: boolean;
+  /** Set when the last dispatch attempt failed. */
+  lastError: string | null;
 }
 
 export interface CampaignMetrics {

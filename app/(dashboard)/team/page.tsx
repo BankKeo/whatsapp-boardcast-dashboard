@@ -4,7 +4,7 @@ import { TeamScreen } from "@/components/team/team-screen";
 export const metadata: Metadata = {
   title: "Team & Permissions",
   description:
-    "Team member table with roles, status and last activity, plus the role capability matrix used by the prototype.",
+    "Team member table with roles, status and last activity, plus the capability matrix the API enforces per role.",
 };
 
 export default function TeamPage() {

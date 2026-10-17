@@ -1,4 +1,4 @@
-/** Demo activity feed types. */
+/** Activity feed types. Mirrors the API's audit-log categories. */
 
 export const ACTIVITY_TYPES = [
   "campaign",
@@ -7,6 +7,9 @@ export const ACTIVITY_TYPES = [
   "template",
   "team",
   "integration",
+  "auth",
+  "settings",
+  "import",
 ] as const;
 
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];

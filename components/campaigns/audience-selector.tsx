@@ -5,15 +5,12 @@ import { AlertTriangle, CheckCircle2, Filter, Users } from "lucide-react";
 import { formatNumber } from "@/lib/format";
 import { formatPhone } from "@/lib/phone";
 import { PROVINCES, districtsFor } from "@/lib/data/constants";
-import { audienceBreakdown } from "@/lib/services/outlet-service";
-import { useDemoStore } from "@/lib/store/demo-store";
+import { previewSegment } from "@/lib/api/segments";
+import { useAsync } from "@/lib/hooks/use-async";
+import { useAppStore } from "@/lib/store/app-store";
 import { createEmptyFilters } from "@/types/segment";
-import {
-  OUTLET_CATEGORIES,
-  type OutletFilters,
-} from "@/types/outlet";
+import { isDeliverable, OUTLET_CATEGORIES, type OutletFilters } from "@/types/outlet";
 import type { CampaignAudienceValues } from "@/lib/schemas/campaign";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -27,7 +24,17 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { MultiSelect } from "@/components/shared/multi-select";
-import { EligibilityBadge } from "@/components/shared/status-badge";
+import { CategoryBadge, EligibilityBadge } from "@/components/shared/status-badge";
+
+const EMPTY_BREAKDOWN = {
+  matched: 0,
+  eligible: 0,
+  consented: 0,
+  deliverable: 0,
+  unreachable: 0,
+  withoutConsent: 0,
+  notVerified: 0,
+};
 
 export interface AudienceSelectorProps {
   value: CampaignAudienceValues;
@@ -35,26 +42,16 @@ export interface AudienceSelectorProps {
 }
 
 export function AudienceSelector({ value, onChange }: AudienceSelectorProps) {
-  const store = useDemoStore();
+  const store = useAppStore();
   const filters = value.filters;
 
-  const breakdown = React.useMemo(
-    () => audienceBreakdown(store.outlets, filters),
-    [store.outlets, filters],
-  );
-
-  const previewOutlets = React.useMemo(() => {
-    const matched = store.outlets.filter((outlet) => {
-      if (filters.provinces.length > 0 && !filters.provinces.includes(outlet.province)) return false;
-      if (filters.categories.length > 0 && !filters.categories.includes(outlet.category)) return false;
-      if (filters.eligibility === "eligible" && !outlet.whatsappVerified) return false;
-      if (filters.consent === "consented" && !outlet.marketingConsent) return false;
-      return true;
-    });
-    return matched
-      .filter((outlet) => outlet.whatsappVerified && outlet.marketingConsent)
-      .slice(0, 8);
-  }, [store.outlets, filters]);
+  /*
+   * The server resolves the audience: one preview call returns the consent and
+   * eligibility split plus a sample of matching outlets.
+   */
+  const preview = useAsync((signal) => previewSegment(filters, 24, signal), [filters]);
+  const breakdown = preview.data?.breakdown ?? EMPTY_BREAKDOWN;
+  const previewOutlets = (preview.data?.sample ?? []).filter(isDeliverable).slice(0, 8);
 
   const provinceOptions = React.useMemo(
     () =>
@@ -62,10 +59,10 @@ export function AudienceSelector({ value, onChange }: AudienceSelectorProps) {
         value: province.name,
         label: province.name,
         hint: formatNumber(
-          store.outletStats.byProvince.find((entry) => entry.province === province.name)?.count ?? 0,
+          store.outletStats?.byProvince.find((entry) => entry.province === province.name)?.count ?? 0,
         ),
       })),
-    [store.outletStats.byProvince],
+    [store.outletStats],
   );
 
   const districtOptions = React.useMemo(() => {
@@ -269,7 +266,7 @@ export function AudienceSelector({ value, onChange }: AudienceSelectorProps) {
             <div>
               <CardTitle>Eligible recipients</CardTitle>
               <CardDescription>
-                Counted live from the demo outlet dataset each time the rules change.
+                Counted live by the API each time the rules change.
               </CardDescription>
             </div>
           </CardHeader>
@@ -366,8 +363,8 @@ export function AudienceSelector({ value, onChange }: AudienceSelectorProps) {
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
-                      <EligibilityBadge status="Eligible" />
-                      <Badge variant="outline">{outlet.category}</Badge>
+                      <EligibilityBadge status={outlet.whatsappEligibility} />
+                      <CategoryBadge category={outlet.category} />
                     </div>
                   </li>
                 ))}

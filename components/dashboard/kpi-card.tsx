@@ -2,6 +2,7 @@ import * as React from "react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export interface KpiCardProps {
   label: string;
@@ -16,6 +17,8 @@ export interface KpiCardProps {
   };
   className?: string;
   emphasis?: "default" | "warning";
+  /** Shows a skeleton instead of the value while data loads. */
+  isLoading?: boolean;
 }
 
 export function KpiCard({
@@ -26,6 +29,7 @@ export function KpiCard({
   trend,
   className,
   emphasis = "default",
+  isLoading = false,
 }: KpiCardProps) {
   return (
     <Card className={cn("gap-0 py-0", className)}>
@@ -46,9 +50,13 @@ export function KpiCard({
         </span>
       </div>
       <div className="px-3.5 pb-3 pt-1">
-        <p className="text-xl font-semibold leading-7 tabular-nums tracking-tight">{value}</p>
+        {isLoading ? (
+          <Skeleton aria-hidden="true" className="h-7 w-20" />
+        ) : (
+          <p className="text-xl font-semibold leading-7 tabular-nums tracking-tight">{value}</p>
+        )}
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-          {trend ? (
+          {!isLoading && trend ? (
             <span
               className={cn(
                 "text-[11px] font-medium tabular-nums",
@@ -63,7 +71,9 @@ export function KpiCard({
               <span className="ml-1 font-normal text-muted-foreground">{trend.label}</span>
             </span>
           ) : null}
-          {hint ? <span className="text-[11px] text-muted-foreground">{hint}</span> : null}
+          {!isLoading && hint ? (
+            <span className="text-[11px] text-muted-foreground">{hint}</span>
+          ) : null}
         </div>
       </div>
     </Card>

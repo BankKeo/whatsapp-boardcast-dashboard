@@ -1,8 +1,10 @@
 /**
- * Shared demo configuration: Lao provinces/districts, outlet categories,
- * audience presets and the fixed totals used by the dashboard KPIs.
+ * Reference data shared across the dashboard.
  *
- * All values here are illustrative demo data for the prototype.
+ * Lao provinces and districts are static reference data used by the outlet
+ * form, the filter toolbars and the segment builder. Everything that used to be
+ * demo configuration here (company profile, connection status, pricing, the
+ * fixed demo totals) now comes from the API.
  */
 
 export const COMPANY = {
@@ -17,7 +19,7 @@ export const COMPANY = {
 export interface ProvinceInfo {
   name: string;
   region: "North" | "Central" | "South";
-  /** Relative share of outlets used by the demo data generator. */
+  /** Approximate share of the national outlet base. */
   weight: number;
   districts: string[];
 }
@@ -248,68 +250,3 @@ export function districtsFor(province: string): string[] {
 }
 
 export const REGIONS = ["North", "Central", "South"] as const;
-
-/** Fixed demo totals. Related metrics are kept arithmetically consistent. */
-export const DEMO_TOTALS = {
-  outlets: 12_480,
-  eligibleContacts: 10_860,
-  consentedContacts: 10_320,
-  missingPhone: 96,
-  invalidPhone: 288,
-  duplicatePhoneRecords: 84,
-  campaignsThisMonth: 18,
-  monthAttempted: 44_062,
-  monthSent: 43_842,
-  monthDelivered: 42_650,
-  monthFailed: 1_412,
-} as const;
-
-/**
- * Messages that never left the queue are counted as failed attempts, so
- * `attempted = sent + failed`. Delivered is always a subset of sent.
- */
-export const MONTH_DELIVERY = {
-  attempted: DEMO_TOTALS.monthAttempted,
-  sent: DEMO_TOTALS.monthSent,
-  delivered: DEMO_TOTALS.monthDelivered,
-  failed: DEMO_TOTALS.monthFailed,
-  undelivered: DEMO_TOTALS.monthSent - DEMO_TOTALS.monthDelivered,
-  deliveryRate: DEMO_TOTALS.monthDelivered / DEMO_TOTALS.monthSent,
-};
-
-/** Campaign objectives aligned with the Partner Club programme. */
-export const CAMPAIGN_OWNERS = [
-  "Khamla Sisouphan",
-  "Bounmy Phommaly",
-  "Somsanith Vongsa",
-  "Malee Inthavong",
-  "Anousone Chantavong",
-] as const;
-
-export const CURRENT_USER = {
-  name: "Khamla Sisouphan",
-  email: "khamla.sisouphan@laobrewery-demo.la",
-  role: "Marketing Manager" as const,
-  initials: "KS",
-};
-
-export const WHATSAPP_CONNECTION = {
-  status: "demo" as "demo" | "connected" | "disconnected",
-  businessAccount: "Not connected",
-  phoneNumberId: null as string | null,
-  displayName: null as string | null,
-  lastSync: null as string | null,
-  note: "No WhatsApp Business Platform credentials are configured. Campaign sends are simulated in the browser only.",
-};
-
-export const OUTLET_DATABASE_CONNECTION = {
-  status: "demo" as "demo" | "connected" | "disconnected",
-  name: "Partner Club outlet register (demo)",
-  note: "Outlets are generated locally from the demo dataset. No database connection is configured.",
-};
-
-export const PRICING = {
-  configured: false,
-  currency: "USD",
-  note: "Conversation pricing has not been configured, so campaign cost estimates are unavailable.",
-};
