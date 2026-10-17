@@ -1,26 +1,237 @@
 @import "tailwindcss";
 
+/* ------------------------------------------------------------------ */
+/* Enterprise Admin Dashboard - Data-Dense Design System              */
+/* Light theme by default, restrained Carlsberg-inspired green accent */
+/* ------------------------------------------------------------------ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f6f7f9;
+  --foreground: #16181d;
+
+  --card: #ffffff;
+  --card-foreground: #16181d;
+
+  --popover: #ffffff;
+  --popover-foreground: #16181d;
+
+  --primary: #0b6b3a;
+  --primary-foreground: #f7fdf9;
+
+  --secondary: #f1f3f5;
+  --secondary-foreground: #24262c;
+
+  --muted: #f4f5f7;
+  --muted-foreground: #6b7280;
+
+  --accent: #eef1f4;
+  --accent-foreground: #1c1f26;
+
+  --destructive: #b3261e;
+  --destructive-foreground: #ffffff;
+
+  --success: #0b6b3a;
+  --success-foreground: #ffffff;
+  --success-surface: #e7f4ec;
+
+  --warning: #9a5b00;
+  --warning-foreground: #ffffff;
+  --warning-surface: #fdf3e2;
+
+  --info: #1d5fa8;
+  --info-foreground: #ffffff;
+  --info-surface: #eaf1fa;
+
+  --border: #e2e5ea;
+  --input: #d7dbe1;
+  --ring: #0b6b3a;
+
+  --chart-1: #0b6b3a;
+  --chart-2: #4c9a6a;
+  --chart-3: #8fbfa3;
+  --chart-4: #1d5fa8;
+  --chart-5: #9a5b00;
+
+  --sidebar: #ffffff;
+  --sidebar-foreground: #16181d;
+  --sidebar-accent: #eef1f4;
+  --sidebar-accent-foreground: #0b6b3a;
+  --sidebar-border: #e2e5ea;
+  --sidebar-primary: #0b6b3a;
+  --sidebar-primary-foreground: #f7fdf9;
+
+  --radius: 0.5rem;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-surface: var(--success-surface);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-surface: var(--warning-surface);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-info-surface: var(--info-surface);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-lao: var(--font-noto-lao), var(--font-inter), sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-synthesis-weight: none;
+    text-rendering: optimizeLegibility;
+  }
+
+  :focus-visible {
+    outline-style: solid;
+    outline-width: 2px;
+    outline-offset: 2px;
+    outline-color: var(--ring);
+  }
+
+  /* Numeric tables read better with tabular figures */
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--primary) 22%, transparent);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer utilities {
+  .lao {
+    font-family: var(--font-lao);
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  /* Shrinks a dialog/sheet width below the viewport on small screens */
+  .dialog-viewport {
+    width: min(100%, calc(100vw - 2rem));
+  }
+}
+
+/* Minimal animation set used by Radix primitives (no external plugin). */
+@keyframes overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes content-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes sheet-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes sheet-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+[data-slot="dialog-overlay"][data-state="open"],
+[data-slot="sheet-overlay"][data-state="open"],
+[data-slot="alert-dialog-overlay"][data-state="open"] {
+  animation: overlay-fade-in 140ms ease-out;
+}
+
+[data-slot="dialog-content"][data-state="open"],
+[data-slot="alert-dialog-content"][data-state="open"],
+[data-slot="dropdown-menu-content"][data-state="open"],
+[data-slot="select-content"][data-state="open"],
+[data-slot="popover-content"][data-state="open"] {
+  animation: content-pop-in 140ms ease-out;
+}
+
+[data-slot="sheet-content"][data-state="open"][data-side="right"] {
+  animation: sheet-in-right 180ms ease-out;
+}
+
+[data-slot="sheet-content"][data-state="open"][data-side="left"] {
+  animation: sheet-in-left 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
