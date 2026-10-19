@@ -13,6 +13,8 @@ export interface WhatsAppPreviewProps {
   className?: string;
   /** Shown above the bubble when the template has an image header. */
   mediaLabel?: string | null;
+  /** Public image URL rendered as the header; falls back to `mediaLabel`. */
+  imageUrl?: string | null;
 }
 
 /**
@@ -25,6 +27,7 @@ export function WhatsAppPreview({
   timestamp = "09:30",
   className,
   mediaLabel,
+  imageUrl,
 }: WhatsAppPreviewProps) {
   return (
     <div
@@ -50,7 +53,14 @@ export function WhatsAppPreview({
       </div>
 
       <div className="flex flex-col gap-2 px-3 py-3">
-        {mediaLabel ? (
+        {imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- arbitrary user-supplied URLs need no optimizer allowlist
+          <img
+            src={imageUrl}
+            alt="Promotional image header"
+            className="max-h-56 w-full max-w-[85%] self-start rounded-lg object-cover shadow-sm"
+          />
+        ) : mediaLabel ? (
           <div className="flex items-center gap-2 self-start rounded-md border border-dashed border-[#b9b0a4] bg-white/60 px-3 py-4 text-[11px] text-[#5b564d]">
             <ImageIcon className="size-4" aria-hidden="true" />
             {mediaLabel}

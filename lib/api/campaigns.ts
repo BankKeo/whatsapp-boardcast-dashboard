@@ -59,6 +59,8 @@ export interface CampaignMessageValues {
   templateId: string;
   language: CampaignLanguage;
   message: string;
+  /** Optional public image URL for the template's image header. */
+  imageUrl?: string | null;
   promotionPeriod?: string;
 }
 

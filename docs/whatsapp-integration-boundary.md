@@ -15,6 +15,7 @@ needs:
 | Recipient count | `CampaignAudienceValues.recipients` | Sanity check against the re-run query |
 | Template reference and language | `CampaignMessageValues` | Pick the approved template name/language |
 | Message body with `{{n}}` variables | `CampaignMessageValues.message` | Build template components |
+| Optional image header URL | `CampaignMessageValues.imageUrl` | Build the template's image header component |
 | Schedule | `scheduledAt` (ISO string) | Cron/queue target |
 | Confirmation flag | “I understand this is a demo run” checkbox | Replace with a real approval record |
 

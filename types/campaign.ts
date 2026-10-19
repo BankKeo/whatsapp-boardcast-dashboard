@@ -44,6 +44,8 @@ export interface Campaign {
   templateName: string | null;
   language: CampaignLanguage;
   message: string;
+  /** Public image URL sent as the WhatsApp template's image header, or null. */
+  imageUrl: string | null;
   status: CampaignStatus;
   createdAt: string;
   createdBy: string;

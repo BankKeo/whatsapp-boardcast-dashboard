@@ -43,6 +43,15 @@ export const campaignAudienceSchema = z
 
 export type CampaignAudienceValues = z.infer<typeof campaignAudienceSchema>;
 
+/**
+ * Optional image-header URL. A cleared field arrives as an empty string, so it
+ * is normalised to `null` rather than failing validation.
+ */
+export const campaignImageUrlSchema = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? null : value),
+  z.url("Enter a valid image URL, for example https://example.com/banner.jpg.").max(2048).nullable(),
+);
+
 export const campaignMessageSchema = z.object({
   templateId: z.string().min(1, "Select a message template."),
   language: z.enum(["en", "lo"]),
@@ -51,6 +60,7 @@ export const campaignMessageSchema = z.object({
     .trim()
     .min(20, "Message body must be at least 20 characters.")
     .max(1024, "WhatsApp template bodies are limited to 1,024 characters."),
+  imageUrl: campaignImageUrlSchema.default(null),
 });
 
 export type CampaignMessageValues = z.infer<typeof campaignMessageSchema>;
@@ -74,6 +84,7 @@ export const campaignSchema = z.object({
   templateName: z.string().nullable(),
   language: z.enum(["en", "lo"]),
   message: z.string(),
+  imageUrl: z.string().nullable(),
   status: z.enum(CAMPAIGN_STATUSES),
   createdAt: z.string(),
   createdBy: z.string(),

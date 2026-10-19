@@ -264,6 +264,7 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
     templateName: null,
     language: "en",
     message: "",
+    imageUrl: null,
   });
   const [scheduledDate, setScheduledDate] = React.useState<string | null>(null);
   const [scheduledTime, setScheduledTime] = React.useState("09:00");
@@ -299,6 +300,7 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
           templateName: linkedTemplate.name,
           language: linkedTemplate.language,
           message: linkedTemplate.body,
+          imageUrl: null,
         });
         toast.info("Template loaded", { description: linkedTemplate.name });
       }
@@ -342,7 +344,12 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
     () =>
       buildCampaignWarnings({
         details,
-        message: { templateId: message.templateId, language: message.language, message: message.message },
+        message: {
+          templateId: message.templateId,
+          language: message.language,
+          message: message.message,
+          imageUrl: message.imageUrl,
+        },
         template,
         breakdown,
         scheduledAt,
@@ -378,6 +385,7 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
         templateId: message.templateId,
         language: message.language,
         message: message.message,
+        imageUrl: message.imageUrl,
       });
       if (!parsed.success) {
         toast.error("Message needs attention", {
@@ -397,6 +405,7 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
         templateId: message.templateId,
         language: message.language,
         message: message.message,
+        imageUrl: message.imageUrl?.trim() ? message.imageUrl.trim() : null,
       },
       scheduledAt,
       idempotencyKey: `wizard-${crypto.randomUUID()}`,
@@ -576,7 +585,7 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
                     owner: currentUserName,
                   });
                   setAudience({ ...emptyCampaignAudience(), filters: createEmptyFilters() });
-                  setMessage({ templateId: "", templateName: null, language: "en", message: "" });
+                  setMessage({ templateId: "", templateName: null, language: "en", message: "", imageUrl: null });
                   setScheduledDate(null);
                 }}
               >
@@ -667,6 +676,7 @@ export function CampaignWizard({ initialDetails, initialSegmentId = null }: Camp
             templateId: message.templateId,
             language: message.language,
             message: message.message,
+            imageUrl: message.imageUrl,
           }}
           template={template}
           scheduledAt={scheduledAt}

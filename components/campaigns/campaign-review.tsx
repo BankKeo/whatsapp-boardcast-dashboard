@@ -259,6 +259,10 @@ export function CampaignReview({
               value={message.language === "lo" ? "Lao (ລາວ)" : "English"}
             />
             <SummaryRow
+              label="Image header"
+              value={message.imageUrl ? "Attached" : "None (text only)"}
+            />
+            <SummaryRow
               label="Scheduled date and time"
               value={scheduledAt ? formatDateTime(scheduledAt) : "Not scheduled yet"}
             />
@@ -342,7 +346,11 @@ export function CampaignReview({
             </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
-            <WhatsAppPreview message={rendered} language={message.language} />
+            <WhatsAppPreview
+              message={rendered}
+              language={message.language}
+              imageUrl={message.imageUrl}
+            />
             <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
               <Checkbox
                 id="confirm-demo-send"

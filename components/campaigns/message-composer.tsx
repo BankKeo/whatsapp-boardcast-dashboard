@@ -4,6 +4,7 @@ import * as React from "react";
 import { AlertTriangle, CheckCircle2, ImageIcon, Wand2 } from "lucide-react";
 import { formatNumber } from "@/lib/format";
 import { renderTemplate, variablesForBody } from "@/lib/services/template-service";
+import { campaignImageUrlSchema } from "@/lib/schemas/campaign";
 import { previewSegment } from "@/lib/api/segments";
 import { useAsync } from "@/lib/hooks/use-async";
 import { useAppStore } from "@/lib/store/app-store";
@@ -12,6 +13,7 @@ import { isDeliverable, type OutletFilters } from "@/types/outlet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -30,6 +32,8 @@ export interface ComposerValue {
   templateName: string | null;
   language: TemplateLanguage;
   message: string;
+  /** Optional public image URL for the template's image header. */
+  imageUrl: string | null;
 }
 
 export interface MessageComposerProps {
@@ -58,6 +62,8 @@ export function MessageComposer({ value, onChange, audienceFilters }: MessageCom
 
   const usedVariables = variablesForBody(value.message);
   const characterCount = value.message.length;
+  const trimmedImageUrl = value.imageUrl?.trim() ?? "";
+  const imageUrlValid = campaignImageUrlSchema.safeParse(trimmedImageUrl).success;
 
   function applyTemplate(templateId: string) {
     const template = store.templates.find((item) => item.id === templateId);
@@ -70,6 +76,7 @@ export function MessageComposer({ value, onChange, audienceFilters }: MessageCom
       templateName: template.name,
       language: template.language,
       message: template.body,
+      imageUrl: value.imageUrl,
     });
   }
 
@@ -86,6 +93,7 @@ export function MessageComposer({ value, onChange, audienceFilters }: MessageCom
         templateName: match.name,
         language,
         message: match.body,
+        imageUrl: value.imageUrl,
       });
       return;
     }
@@ -250,16 +258,35 @@ export function MessageComposer({ value, onChange, audienceFilters }: MessageCom
 
             <Separator />
 
-            <div className="flex items-start gap-3 rounded-md border border-dashed border-border px-3 py-3">
-              <ImageIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <div className="flex flex-col gap-0.5">
-                <p className="text-[12px] font-medium">Promotional image</p>
-                <p className="text-[11px] leading-5 text-muted-foreground">
-                  Campaigns here are text only: image headers require an approved media asset
-                  uploaded through the WhatsApp Business Platform, which this dashboard does not
-                  manage yet.
-                </p>
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="campaign-image" className="flex items-center gap-1.5">
+                  <ImageIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                  Promotional image URL
+                </Label>
+                <span className="text-[11px] text-muted-foreground">
+                  Optional · WhatsApp image header
+                </span>
               </div>
+              <Input
+                id="campaign-image"
+                type="url"
+                inputMode="url"
+                placeholder="https://cdn.example.com/promo/banner.jpg"
+                value={value.imageUrl ?? ""}
+                onChange={(event) => onChange({ ...value, imageUrl: event.target.value })}
+                aria-invalid={trimmedImageUrl !== "" && !imageUrlValid}
+                aria-describedby="campaign-image-help"
+              />
+              <p id="campaign-image-help" className="text-[11px] text-muted-foreground">
+                Paste a public https link (JPG or PNG). WhatsApp fetches it as the message header;
+                leave this blank to send a text-only message.
+              </p>
+              {trimmedImageUrl !== "" && !imageUrlValid ? (
+                <p className="text-[11px] font-medium text-destructive">
+                  Enter a valid image URL, for example https://example.com/banner.jpg.
+                </p>
+              ) : null}
             </div>
           </CardContent>
         </Card>
@@ -277,7 +304,11 @@ export function MessageComposer({ value, onChange, audienceFilters }: MessageCom
             </div>
           </CardHeader>
           <CardContent>
-            <WhatsAppPreview message={rendered} language={value.language} />
+            <WhatsAppPreview
+              message={rendered}
+              language={value.language}
+              imageUrl={trimmedImageUrl || null}
+            />
           </CardContent>
         </Card>
 

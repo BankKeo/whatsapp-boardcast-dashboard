@@ -371,6 +371,7 @@ export function CampaignDetailScreen({ campaignId }: { campaignId: string }) {
             <WhatsAppPreview
               message={renderTemplate(campaign.message, { outlet: sampleOutlet ?? undefined })}
               language={campaign.language}
+              imageUrl={campaign.imageUrl}
             />
           </CardContent>
         </Card>
