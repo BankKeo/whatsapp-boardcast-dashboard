@@ -1,0 +1,42 @@
+node_modules
+.pnpm-store
+.next
+out
+build
+coverage
+
+# Secrets and local configuration. NEXT_PUBLIC_API_URL comes in as a build arg.
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+
+# Cloudflare / OpenNext build artifacts (not used by the Docker image)
+.open-next
+.wrangler
+cloudflare-env.d.ts
+
+*.log
+*.tsbuildinfo
+*.pem
+next-env.d.ts
+.vercel
+.turbo
+.cache
+.pnp
+.pnp.*
+.yarn
+
+# Editor / VCS metadata
+.git
+.github
+.vscode
+.idea
+
+Dockerfile
+.dockerignore
+README.md
+AGENTS.md
+docs
+.DS_Store
